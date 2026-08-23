@@ -33,9 +33,9 @@ device and translation stack rather than on the storefront.
 
 | Stage | State |
 |---|---|
-| 1 — Environment survey | tooling built, **not yet run on device** |
-| 2 — Adreno 830 capabilities | probe built + validated, **never seen an Adreno** |
-| 3 — Star Bionic layer | not started (blocked on Stage 2 data) |
+| 1 — Environment survey | **done** — S25+ / SM8750 / Adreno830v2 confirmed |
+| 2 — Adreno 830 capabilities | **measured** (vendor driver) — [results](docs/02-adreno830-capabilities.md); Turnip capture still open |
+| 3 — Star Bionic layer | not started — target list now set by Stage 2 |
 | 4 — VKD3D-Proton / DX12 path | not started |
 | 5 — Shader & pipeline cache | not started |
 | 6 — CPU affinity | not started |
@@ -46,9 +46,11 @@ device and translation stack rather than on the storefront.
 | 12 — Optimisation priority | n/a |
 | 13 — Feature flags | [contract defined](docs/13-feature-flags.md) |
 
-Stages 3–12 are deliberately not started. They depend on capability data that
-does not exist yet, and starting them now would mean guessing at what Adreno
-830 supports — which the project rules prohibit.
+Stage 2 is measured on the vendor driver: **every VKD3D-Proton requirement is
+present, including `textureCompressionBC`**, so capability is not the blocker.
+That relocates the performance question to CPU translation overhead, shader
+compilation, memory bandwidth and thermals. Turnip's own feature set — what
+Winlator will actually run — is still unmeasured and will likely be narrower.
 
 ---
 
@@ -60,6 +62,9 @@ does not exist yet, and starting them now would mean guessing at what Adreno
   a Game Pass copy cannot currently be launched outside Windows.** The
   Microsoft Store cannot be added to the build, and Xodus cannot launch games
   yet. The blocker is upstream; the graphics work is unaffected.
+- **[docs/02-adreno830-capabilities.md](docs/02-adreno830-capabilities.md)** —
+  Stage 2 results measured on the device: what Adreno 830 actually exposes,
+  the gaps that shape the plan, and what it does not tell us.
 - **[docs/13-feature-flags.md](docs/13-feature-flags.md)** — flag contract.
 
 ---

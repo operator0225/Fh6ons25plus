@@ -95,6 +95,8 @@ printf '  %-38s %s\n' "mesh_shader __source"  "$(grep -A1 '"mesh_shader"' "$F" |
 row "meshShader"           "$(g meshShader)"
 printf '  %-38s %s\n' "ray_tracing __pipeline_source" "$(grep -A1 '"ray_tracing"' "$F" | grep -o '"__pipeline_source": "[^"]*"' | cut -d'"' -f4)"
 row "rayTracingPipeline"   "$(g rayTracingPipeline)"
+printf '  %-38s %s\n' "ray_tracing __accel_source" "$(grep -A2 '"ray_tracing"' "$F" | grep -o '"__accel_source": "[^"]*"' | cut -d'"' -f4)"
+row "accelerationStructure" "$(g accelerationStructure)"
 row "VK_KHR_ray_query"     "$(g VK_KHR_ray_query)"
 row "attachmentFragmentShadingRate" "$(g attachmentFragmentShadingRate)"
 echo
@@ -127,7 +129,17 @@ printf '  %-38s %s\n' "timestampPeriod (ns)" "$(grep -o '"timestampPeriod": [0-9
 row "timestampComputeAndGraphics" "$(g timestampComputeAndGraphics)"
 echo
 echo "--- QUEUES ---"
-grep -o '"queueCount": [0-9]*' "$F" | awk '{printf "  queue family: count=%s\n", $2}'
+if command -v python3 >/dev/null 2>&1; then
+python3 - "$F" <<'PY'
+import json,sys
+dev=json.load(open(sys.argv[1]))["physical_devices"][0]
+for q in dev.get("queue_families",[]):
+    print(f"  family{q['index']}  count={q['queueCount']:<3} "
+          f"timestampBits={q['timestampValidBits']:<3} {'+'.join(q['flags'])}")
+PY
+else
+  grep -o '"queueCount": [0-9]*' "$F" | awk '{printf "  queue family: count=%s\n", $2}'
+fi
 echo
 printf '  %-38s %s\n' "device_extension_count" "$(g device_extension_count)"
 printf '  %-38s %s\n' "pipelineCacheUUID" "$(gs pipelineCacheUUID)"
