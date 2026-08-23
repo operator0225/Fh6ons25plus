@@ -23,6 +23,14 @@ exists now is the measurement tooling that everything else depends on.
 been run on an Adreno 830. Whether 1080p / High / 60 FPS is achievable is an
 open question, and it will be answered by measurement or not at all.
 
+**Game acquisition is separately blocked.** The available FH6 copy is PC Game
+Pass, and no Game Pass title currently launches outside Windows — Xodus can
+sign in, download and decrypt, but cannot launch games pending an upstream
+Xbox Gaming Runtime reimplementation with no announced timeline. See
+[docs/01-gamepass-msstore.md](docs/01-gamepass-msstore.md). This blocks
+launching FH6 specifically; it does not block Stages 2-12, which depend on the
+device and translation stack rather than on the storefront.
+
 | Stage | State |
 |---|---|
 | 1 — Environment survey | tooling built, **not yet run on device** |
@@ -48,9 +56,10 @@ does not exist yet, and starting them now would mean guessing at what Adreno
 
 - **[docs/00-repo-analysis.md](docs/00-repo-analysis.md)** — Stage 1 report:
   empty-repo finding, build environment limits, verified external facts.
-- **[docs/01-gamepass-msstore.md](docs/01-gamepass-msstore.md)** — **PC Game
-  Pass copies need a different approach.** The Microsoft Store cannot be added
-  to the build. Two workable paths, with a recommendation.
+- **[docs/01-gamepass-msstore.md](docs/01-gamepass-msstore.md)** — **FH6 from
+  a Game Pass copy cannot currently be launched outside Windows.** The
+  Microsoft Store cannot be added to the build, and Xodus cannot launch games
+  yet. The blocker is upstream; the graphics work is unaffected.
 - **[docs/13-feature-flags.md](docs/13-feature-flags.md)** — flag contract.
 
 ---
