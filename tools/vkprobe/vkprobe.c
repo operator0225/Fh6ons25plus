@@ -30,7 +30,22 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 
-#include <dlfcn.h>
+#ifdef _WIN32
+  #include <windows.h>
+  #define LIB_HANDLE   HMODULE
+  #define LIB_OPEN(p)  LoadLibraryA(p)
+  #define LIB_SYM(h,n) ((void *)(uintptr_t)GetProcAddress((h), (n)))
+  #define LIB_ERR()    "LoadLibrary failed"
+  #define SETENV(k,v)  _putenv_s((k), (v))
+#else
+  #include <dlfcn.h>
+  #define LIB_HANDLE   void *
+  #define LIB_OPEN(p)  dlopen((p), RTLD_NOW | RTLD_LOCAL)
+  #define LIB_SYM(h,n) dlsym((h), (n))
+  #define LIB_ERR()    dlerror()
+  #define SETENV(k,v)  setenv((k), (v), 1)
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -187,30 +202,37 @@ static int load_loader(const char *path)
      * HAL, and therefore the actual Adreno.
      */
     static const char *candidates[] = {
+#ifdef _WIN32
+        /* Inside Wine this is winevulkan, which forwards to whatever native
+         * driver the container is configured with -- i.e. exactly the device
+         * VKD3D-Proton will see. That is the point of the Windows build. */
+        "vulkan-1.dll",
+#else
         "/system/lib64/libvulkan.so",
         "/system/lib/libvulkan.so",
         "libvulkan.so.1",
         "libvulkan.so",
-        "vulkan-1.dll",
+#endif
         NULL,
     };
-    void *lib = NULL;
+    LIB_HANDLE lib = NULL;
 
     if (path) {
-        lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+        lib = LIB_OPEN(path);
         g_libpath = path;
     } else {
         for (int i = 0; candidates[i]; i++) {
-            lib = dlopen(candidates[i], RTLD_NOW | RTLD_LOCAL);
+            lib = LIB_OPEN(candidates[i]);
             if (lib) { g_libpath = candidates[i]; break; }
         }
     }
     if (!lib) {
-        fprintf(stderr, "vkprobe: cannot dlopen Vulkan loader: %s\n", dlerror());
+        fprintf(stderr, "vkprobe: cannot load Vulkan loader: %s\n", LIB_ERR());
         return 0;
     }
 
-    p_GetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr");
+    p_GetInstanceProcAddr =
+        (PFN_vkGetInstanceProcAddr)(uintptr_t)LIB_SYM(lib, "vkGetInstanceProcAddr");
     if (!p_GetInstanceProcAddr) {
         fprintf(stderr, "vkprobe: no vkGetInstanceProcAddr in %s\n", g_libpath);
         return 0;
@@ -1061,8 +1083,8 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--lib") && i + 1 < argc) {
             libpath = argv[++i];
         } else if (!strcmp(argv[i], "--icd") && i + 1 < argc) {
-            setenv("VK_ICD_FILENAMES", argv[++i], 1);
-            setenv("VK_DRIVER_FILES", argv[i], 1);
+            SETENV("VK_ICD_FILENAMES", argv[++i]);
+            SETENV("VK_DRIVER_FILES", argv[i]);
         } else if (!strcmp(argv[i], "--device") && i + 1 < argc) {
             only_device = strtol(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
