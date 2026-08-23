@@ -81,6 +81,14 @@ a tarball, and a `SUMMARY.txt`.
 Answers the two gating questions: is a VKD3D-Proton DX12 path present, and is
 Turnip actually the driver in use?
 
+### `tools/collect.sh` — one-command device collection
+
+Wraps both tools below for Termux: installs dependencies, captures the
+device, builds `vkprobe`, probes the default loader *and* every Mesa/Turnip
+ICD found on disk, and bundles a tarball with a summary listing each
+driver's identity and `textureCompressionBC`. This is the intended entry
+point; the two tools below are what it drives.
+
 ### `tools/vkprobe/` — Vulkan capability probe
 
 Reports what Vulkan actually exposes, from `vkGetPhysicalDeviceFeatures2` /
@@ -92,21 +100,24 @@ and reports which driver actually answered.
 
 ---
 
-## Next step
+## Next step — run `collect.sh` on the S25+
 
-Run both tools on the S25+ and send back the results:
+One command in Termux. Installs what it needs, runs the Stage 1 capture,
+builds and runs the Stage 2 probe against **every** driver it finds, and
+bundles one tarball:
 
 ```sh
-./tools/diagnose.sh --out diag-s25plus
-
-# Termux:
-pkg install clang vulkan-headers
-cc -O2 -o vkprobe tools/vkprobe/vkprobe.c -ldl
-./vkprobe > caps-system.json
-./vkprobe --icd /path/to/freedreno_icd.aarch64.json > caps-turnip.json
+pkg install -y git
+git clone https://github.com/operator0225/Fh6ons25plus
+cd Fh6ons25plus && git checkout claude/star-bionic-adreno-fh6-8a79z1
+./tools/collect.sh              # or --push to push a results branch
 ```
 
-Send `diag-s25plus.tar.gz`, `caps-system.json`, `caps-turnip.json`.
+No root, no adb, no inbound connection — the phone only makes outbound
+HTTPS. Send the tarball back, or use `--push`.
+
+The summary it prints already answers the two questions that gate Stage 3:
+which driver actually answered, and whether `textureCompressionBC` is true.
 
 Stage 2 analysis and the Stage 3 design follow from that data.
 
