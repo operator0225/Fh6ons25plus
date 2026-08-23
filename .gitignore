@@ -1,0 +1,17 @@
+# build output
+tools/vkprobe/build/
+*.o
+*.so
+/vkprobe
+
+# capture output -- device data, not source
+diag-*/
+diag-*.tar.gz
+caps*.json
+*.csv
+
+# editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
