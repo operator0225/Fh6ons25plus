@@ -89,6 +89,17 @@ ICD found on disk, and bundles a tarball with a summary listing each
 driver's identity and `textureCompressionBC`. This is the intended entry
 point; the two tools below are what it drives.
 
+### `tools/report.sh` — paste-able Stage 2 summary
+
+```sh
+./tools/report.sh collect-*/caps-android.json
+```
+
+Renders a capture as a compact table: driver identity, API level, the
+DX12/VKD3D-critical feature set, texture and depth formats, subgroup, sparse,
+memory heaps and limits. Needs only grep/awk. A field the probe did not
+capture prints `?`, never a guessed `no`.
+
 ### `tools/vkprobe/` — Vulkan capability probe
 
 Reports what Vulkan actually exposes, from `vkGetPhysicalDeviceFeatures2` /
