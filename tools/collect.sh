@@ -71,16 +71,45 @@ fi
 # 3. Probe every driver we can find
 # ------------------------------------------------------------------
 echo "[3/4] probing drivers"
+
+# Reports driver name and flags a CPU renderer, which is the failure mode
+# that matters: Termux ships its own libvulkan backed by a software
+# rasterizer, so a probe can succeed and still have measured no GPU at all.
+report_probe() {
+  local label="$1" f="$2"
+  local name sw
+  name=$(grep -o '"driverName": "[^"]*"' "$f" | head -1 | cut -d'"' -f4)
+  sw=$(grep -o '"is_software_rasterizer": [a-z]*' "$f" | head -1 | awk '{print $2}')
+  if [[ "$sw" == "true" ]]; then
+    echo "      $label -> ${name:-unknown}  *** SOFTWARE RASTERIZER, NOT THE GPU ***"
+  else
+    echo "      $label -> ${name:-unknown}"
+  fi
+}
+
 if [[ -x "$OUT/vkprobe" ]]; then
-  # 3a. whatever the loader picks by default -- normally the Qualcomm blob
+  # 3a. THE important one: the Android system loader, which reaches the
+  # vendor HAL and therefore the actual Adreno.
+  for syslib in /system/lib64/libvulkan.so /system/lib/libvulkan.so; do
+    [[ -e "$syslib" ]] || continue
+    if "$OUT/vkprobe" --lib "$syslib" > "$OUT/caps-android.json" 2> "$OUT/caps-android.err"; then
+      report_probe "android system  " "$OUT/caps-android.json"
+    else
+      echo "      android system   -> FAILED (see caps-android.err)"
+    fi
+    break
+  done
+  [[ -e "$OUT/caps-android.json" ]] || echo "      android system   -> no /system libvulkan found"
+
+  # 3b. whatever the ambient loader picks -- under Termux this is usually
+  # Termux's own software driver, captured for comparison, not for use.
   if "$OUT/vkprobe" > "$OUT/caps-default.json" 2> "$OUT/caps-default.err"; then
-    name=$(grep -o '"driverName": "[^"]*"' "$OUT/caps-default.json" | head -1 | cut -d'"' -f4)
-    echo "      default loader   -> ${name:-unknown}"
+    report_probe "default loader  " "$OUT/caps-default.json"
   else
     echo "      default loader   -> FAILED (see caps-default.err)"
   fi
 
-  # 3b. every Turnip/Mesa ICD present on the device.
+  # 3c. every Turnip/Mesa ICD present on the device.
   # Presence on disk is not use -- each one gets probed explicitly so
   # driverName in the output says which driver actually answered.
   mapfile -t ICDS < <(find /data /sdcard /storage/emulated/0 -maxdepth 8 \
@@ -97,8 +126,7 @@ if [[ -x "$OUT/vkprobe" ]]; then
     dest="$OUT/caps-icd$i.json"
     echo "$icd" > "$OUT/caps-icd$i.path"
     if "$OUT/vkprobe" --icd "$icd" > "$dest" 2> "$OUT/caps-icd$i.err"; then
-      name=$(grep -o '"driverName": "[^"]*"' "$dest" | head -1 | cut -d'"' -f4)
-      echo "      icd$i -> ${name:-unknown}   ($icd)"
+      report_probe "icd$i            " "$dest"
     else
       echo "      icd$i -> FAILED   ($icd)"
     fi
@@ -125,8 +153,14 @@ tar -czf "$TARBALL" -C "$REPO_ROOT" "$(basename "$OUT")" 2>/dev/null
     n=$(grep -o '"driverName": "[^"]*"' "$f" | head -1 | cut -d'"' -f4)
     d=$(grep -o '"driverID": "[^"]*"' "$f" | head -1 | cut -d'"' -f4)
     bc=$(grep -o '"textureCompressionBC": [a-z]*' "$f" | head -1 | awk '{print $2}')
-    printf "  %-22s %-26s %s  textureCompressionBC=%s\n" \
-      "$(basename "$f")" "${n:-?}" "${d:-?}" "${bc:-?}"
+    sw=$(grep -o '"is_software_rasterizer": [a-z]*' "$f" | head -1 | awk '{print $2}')
+    if [ "$sw" = "true" ]; then
+      printf "  %-22s %-26s %s  *** SOFTWARE, NOT THE GPU -- ignore ***\n" \
+        "$(basename "$f")" "${n:-?}" "${d:-?}"
+    else
+      printf "  %-22s %-26s %s  textureCompressionBC=%s\n" \
+        "$(basename "$f")" "${n:-?}" "${d:-?}" "${bc:-?}"
+    fi
   done
   echo
   cat "$OUT/diag/SUMMARY.txt" 2>/dev/null

@@ -174,10 +174,21 @@ static PFN_vkGetPhysicalDeviceExternalSemaphoreProperties p_GetPhysicalDeviceExt
 #define GIPA(inst, name) p_GetInstanceProcAddr(inst, name)
 
 static const char *g_libpath;
+static int g_software_rasterizer;  /* set if any device is a CPU renderer */
 
 static int load_loader(const char *path)
 {
+    /*
+     * Order matters on Android. Termux ships its own libvulkan under its
+     * prefix, backed by a software rasterizer (lavapipe/llvmpipe). A bare
+     * "libvulkan.so" resolves to THAT, and the probe then cheerfully reports
+     * a CPU renderer's capabilities as if they were the GPU's. Ask the
+     * Android system loader first -- it is the one that reaches the vendor
+     * HAL, and therefore the actual Adreno.
+     */
     static const char *candidates[] = {
+        "/system/lib64/libvulkan.so",
+        "/system/lib/libvulkan.so",
         "libvulkan.so.1",
         "libvulkan.so",
         "vulkan-1.dll",
@@ -552,6 +563,32 @@ static void probe_device(VkInstance inst, VkPhysicalDevice pd, uint32_t index)
         jbool("is_qualcomm_proprietary", drv.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY);
     }
     jobj_end();
+
+    /*
+     * A software rasterizer answering means we measured a CPU, not the GPU.
+     * Every capability below would be that CPU renderer's, and reading them
+     * as the device's would be worse than having no data at all -- so say so
+     * loudly, in the JSON and on stderr.
+     */
+    {
+        int sw = base_props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ||
+                 (avail(drv_src) && (drv.driverID == VK_DRIVER_ID_MESA_LLVMPIPE ||
+                                     drv.driverID == VK_DRIVER_ID_GOOGLE_SWIFTSHADER));
+        jbool("is_software_rasterizer", sw);
+        if (sw) {
+            g_software_rasterizer = 1;
+            jstr("__WARNING",
+                 "SOFTWARE RASTERIZER -- this is a CPU renderer, not the device GPU. "
+                 "Every capability in this file is the CPU renderer's answer and says "
+                 "nothing about the real GPU. Re-run with "
+                 "--lib /system/lib64/libvulkan.so to reach the vendor driver.");
+            fprintf(stderr,
+                "vkprobe: WARNING: device %u (%s) is a SOFTWARE RASTERIZER.\n"
+                "  This is not the device GPU. Results are meaningless for hardware\n"
+                "  capability. Re-run with: --lib /system/lib64/libvulkan.so\n",
+                index, base_props.deviceName);
+        }
+    }
 
     /* base features (Vulkan 1.0 core) */
     jobj("features_core_1_0");
@@ -1147,5 +1184,11 @@ int main(int argc, char **argv)
 
     free(pds);
     if (p_DestroyInstance) p_DestroyInstance(inst, NULL);
+
+    if (g_software_rasterizer)
+        fprintf(stderr,
+            "\nvkprobe: this capture is NOT the device GPU. Do not use it for\n"
+            "         hardware capability decisions.\n");
+
     return 0;
 }
