@@ -1062,6 +1062,9 @@ static void usage(void)
       "  --icd PATH     set VK_ICD_FILENAMES=PATH before loading (pick Turnip\n"
       "                 vs. the vendor blob explicitly)\n"
       "  --device N     probe only physical device N\n"
+      "  --out FILE     write JSON to FILE instead of stdout. Use this inside\n"
+      "                 Winlator, whose launcher gives you no shell to redirect\n"
+      "                 with.\n"
       "  -h, --help     this text\n"
       "\n"
       "Writes a JSON report to stdout. Diagnostics go to stderr, so\n"
@@ -1077,6 +1080,7 @@ static void usage(void)
 int main(int argc, char **argv)
 {
     const char *libpath = NULL;
+    const char *outpath = NULL;
     long only_device = -1;
 
     for (int i = 1; i < argc; i++) {
@@ -1085,6 +1089,8 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[i], "--icd") && i + 1 < argc) {
             SETENV("VK_ICD_FILENAMES", argv[++i]);
             SETENV("VK_DRIVER_FILES", argv[i]);
+        } else if (!strcmp(argv[i], "--out") && i + 1 < argc) {
+            outpath = argv[++i];
         } else if (!strcmp(argv[i], "--device") && i + 1 < argc) {
             only_device = strtol(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
@@ -1095,6 +1101,14 @@ int main(int argc, char **argv)
             usage();
             return 2;
         }
+    }
+
+    /* Every emitter writes to stdout, so redirecting it here covers all of
+     * them. Done before any probing so a failure report lands in the file
+     * too -- a run that fails inside Winlator still has to be diagnosable. */
+    if (outpath && !freopen(outpath, "w", stdout)) {
+        fprintf(stderr, "vkprobe: cannot open --out file '%s'\n", outpath);
+        return 1;
     }
 
     if (!load_loader(libpath))
