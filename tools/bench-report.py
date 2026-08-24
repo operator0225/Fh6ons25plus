@@ -133,14 +133,29 @@ elif "error" in fl:
 else:
     print(f"  {fl.get('__caveat','')}")
     print(f"  timestamp period: {fl.get('timestamp_period_ns')} ns")
-    print("    groups      gpu ms   implied fps   fits 60Hz")
+    print("     groups    avg ms    max ms   spread    fps    60Hz avg/worst")
     for L in fl.get("levels", []):
         g = L.get("gpu_ms_avg")
         if isinstance(g, (int, float)):
-            print(f"    {L['workgroups']:7d} {g:11.2f} {L.get('implied_fps',0):13.1f}"
-                  f"   {'yes' if L.get('fits_60hz_budget') else 'NO'}")
+            mx = L.get("gpu_ms_max", g)
+            sp = L.get("gpu_ms_spread_pct")
+            sp = f"{sp:6.1f}%" if isinstance(sp, (int, float)) else "     ?"
+            # Older captures only carry the averaged flag.
+            fa = L.get("fits_60hz_avg", L.get("fits_60hz_budget"))
+            fw = L.get("fits_60hz_worst")
+            fw = ("yes" if fw else "NO") if fw is not None else "?"
+            print(f"    {L['workgroups']:8d} {g:9.2f} {mx:9.2f} {sp} "
+                  f"{L.get('implied_fps',0):7.0f}    {'yes' if fa else 'NO':>3} / {fw}")
         else:
-            print(f"    {L['workgroups']:7d}   (not measured)")
+            print(f"    {L['workgroups']:8d}   (not measured)")
+    ct = fl.get("groups_consistently_under_60hz")
+    if isinstance(ct, (int, float)) and ct:
+        print(f"  consistently under 60Hz up to : {ct:.0f} workgroups")
+    th = fl.get("groups_at_60hz_budget")
+    if isinstance(th, (int, float)):
+        print(f"  average crosses 16.67 ms at   : {th:.0f} workgroups")
+        print("  NOTE: the gap between those two is the region where the mean")
+        print("        fits 60Hz but individual frames do not.")
 
 mm = d.get("memory")
 print("\n--- MEMORY (Stage 7) ---")

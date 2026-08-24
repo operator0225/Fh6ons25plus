@@ -1184,6 +1184,7 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
      */
     const double BUDGET_60HZ_MS = 1000.0 / 60.0;
     double prev_groups = 0, prev_ms = 0, threshold = 0;
+    double consistent_to = 0;   /* last level whose WORST frame still fit */
 
     jarr("levels");
     for (uint32_t groups = 64; groups <= MAX_GROUPS; groups *= 4) {
@@ -1236,7 +1237,14 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
                 jf("gpu_ms_min", gpu_min);
                 jf("gpu_ms_max", gpu_max);
                 jf("implied_fps", avg > 0 ? 1000.0 / avg : 0.0);
-                jbool("fits_60hz_budget", avg <= 16.67);
+                /* Spread matters more than the average once the GPU is
+                 * actually loaded. A level whose mean fits the budget but
+                 * whose worst frame does not is not a 60 Hz level -- that is
+                 * where the 1% lows live. */
+                jf("gpu_ms_spread_pct", avg > 0 ? (gpu_max - gpu_min) / avg * 100.0 : 0.0);
+                jf("implied_fps_worst", gpu_max > 0 ? 1000.0 / gpu_max : 0.0);
+                jbool("fits_60hz_avg", avg <= BUDGET_60HZ_MS);
+                jbool("fits_60hz_worst", gpu_max <= BUDGET_60HZ_MS);
             } else {
                 jnull("gpu_ms_avg");
             }
@@ -1248,6 +1256,7 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
 
         if (counted && gpu_sum > 0) {
             double avg = gpu_sum / counted;
+            if (gpu_max <= BUDGET_60HZ_MS) consistent_to = groups;
             if (avg > BUDGET_60HZ_MS) {
                 /* Log-linear interpolation between the last two points: work
                  * scales roughly linearly with group count here. */
@@ -1264,6 +1273,11 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
     }
     jarr_end();
 
+    jf("groups_consistently_under_60hz", consistent_to);
+    jstr("consistency_note",
+         "highest level whose WORST frame stayed inside 16.67 ms. Above this "
+         "the average can still fit while individual frames miss -- which is "
+         "what 1% lows measure.");
     if (threshold > 0) {
         jf("groups_at_60hz_budget", threshold);
         jstr("threshold_note",
