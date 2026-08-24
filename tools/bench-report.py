@@ -163,7 +163,12 @@ else:
         print(f"  interleaved    : {qc.get('interleaved_ms'):8.2f} ms")
         print(f"  overlap        : {ov:.3f}   (0 = none, 1 = uploads free)")
         print(f"  upload cost    : {qc.get('upload_cost_ms'):8.2f} ms on top of render")
-        print(f"  -> {qc.get('reading','')}")
+        if qc.get("clock_confounded"):
+            print("  *** CLOCK CONFOUNDED -- these queue numbers are invalid. ***")
+            print("      Interleaved cannot be cheaper than render alone; the GPU")
+            print("      clock moved mid-test. Re-run from a cool device.")
+        else:
+            print(f"  -> {qc.get('reading','')}")
 
 fl = d.get("frame_loop")
 print("\n--- GPU FRAME-TIME CURVE (Stage 8/10) ---")

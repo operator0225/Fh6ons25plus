@@ -38,9 +38,9 @@ device and translation stack rather than on the storefront.
 | 3 — Star Bionic layer | not started — targets now set by measured results |
 | 4 — VKD3D-Proton / DX12 path | **harness built** — [vkbench](docs/04-measurement-harness.md) queue topology test; awaiting device run |
 | 5 — Shader & pipeline cache | **harness built** — cold/warm/seeded pipeline compile benchmark; awaiting device run |
-| 6 — CPU affinity | not started |
+| 6 — CPU affinity | **thermal throttling measured** — sustained clock is 50% of peak |
 | 7 — Android overhead | **harness built** — memory budget pressure test; awaiting device run |
-| 8–9 — Resolution / dynamic res | **GPU throughput curve** measurable via vkbench frame loop |
+| 8–9 — Resolution / dynamic res | throughput curve measurable, but short tests read boost clock only |
 | 10 — Profiler | **system-side done** — [docs](docs/10-profiler.md); FPS needs in-container capture |
 | 11 — Benchmark harness | not started |
 | 12 — Optimisation priority | n/a |

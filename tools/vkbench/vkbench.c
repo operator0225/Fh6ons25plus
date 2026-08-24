@@ -1162,6 +1162,21 @@ static void test_queue_cost(Ctx *c, VkDevice dev, uint32_t gfx_family,
         double overlap = serial > 0 ? (serial - actual) / serial : 0.0;
         jf("overlap_fraction", overlap < 0 ? 0.0 : overlap);
         jf("upload_cost_ms", actual - r);
+        /*
+         * Interleaved does strictly more work than render_only, so a negative
+         * upload cost cannot happen -- it means the GPU clock moved between
+         * the two measurements. The soak showed the clock going 1200 -> 607
+         * MHz over ~15 s, which is far slower than the per-mode warm-up pass
+         * can absorb. Flag it rather than reporting a number that looks fine.
+         */
+        int clock_confounded = (actual < r) || overlap > 0.6;
+        jbool("clock_confounded", clock_confounded);
+        if (clock_confounded)
+            jstr("__WARNING",
+                 "interleaved came out cheaper than render alone, or overlap "
+                 "exceeded 0.6. The GPU clock moved mid-test; treat this "
+                 "run's queue numbers as invalid and re-run from a cool "
+                 "device.");
         jstr("reading",
              actual > serial * 1.05
              ? "worse than serial: no overlap, and the barriers between "

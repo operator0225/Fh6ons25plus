@@ -203,6 +203,10 @@ def cmd_monitor(args):
     try:
         subprocess.call([sys.executable, prof, "--duration", str(args.duration),
                          "--out", out, "--label", args.label])
+    except KeyboardInterrupt:
+        # The profiler handles SIGINT itself and writes its files; this just
+        # keeps Ctrl-C from printing a traceback over the summary.
+        print()
     finally:
         if have_wl:
             subprocess.call(["termux-wake-unlock"])
