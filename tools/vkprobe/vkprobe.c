@@ -1103,6 +1103,15 @@ int main(int argc, char **argv)
         }
     }
 
+#ifdef _WIN32
+    /* Winlator launches an exe by tap, with no shell and no way to pass
+     * arguments or redirect. A console app's output would land in a window
+     * that is unreadable on a phone and gone when it closes. So on Windows,
+     * always write a file -- next to wherever the exe was launched from. */
+    if (!outpath)
+        outpath = "vkprobe-caps.json";
+#endif
+
     /* Every emitter writes to stdout, so redirecting it here covers all of
      * them. Done before any probing so a failure report lands in the file
      * too -- a run that fails inside Winlator still has to be diagnosable. */

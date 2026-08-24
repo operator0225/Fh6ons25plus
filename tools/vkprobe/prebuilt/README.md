@@ -18,17 +18,27 @@ measures what VKD3D-Proton will actually see.
 
 ## Use
 
+Just launch it. **No arguments needed.**
+
+On Windows it always writes a file, because Winlator launches an exe by tap
+— no shell, no arguments, no redirection, and a console window you cannot
+read on a phone. With no `--out` it writes `vkprobe-caps.json` next to
+wherever it was launched from, so putting the exe in `Download` puts the
+JSON in `Download`.
+
+To choose the path explicitly:
+
 ```
 vkprobe.exe --out Z:\sdcard\Download\caps-turnip.json
 ```
 
-`--out` matters: Winlator's launcher gives you no shell, so `> file.json`
-is not available. In Wine, the Android filesystem hangs off `Z:\`.
+In Wine, the Android filesystem hangs off `Z:\`.
 
 Then, back in Termux:
 
 ```sh
-./tools/report.sh /sdcard/Download/caps-turnip.json
+cd ~/Fh6ons25plus
+./tools/report.sh /sdcard/Download/vkprobe-caps.json
 ```
 
 ## Reading the result
