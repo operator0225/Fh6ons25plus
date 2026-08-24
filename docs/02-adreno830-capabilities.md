@@ -86,14 +86,14 @@ raytracing shape. Whether it is actually usable depends on
 which this report does not surface — see "Open items". Either way, RT
 features in FH6 should be off for now.
 
-### 3. No `VK_EXT_memory_budget`
-`memory_budget __source: not-available`. There is **no runtime query for GPU
-memory pressure.**
+### 3. No `VK_EXT_memory_budget` — on this driver only
+`memory_budget __source: not-available` on the Qualcomm blob.
 
-This directly affects Stage 7. Memory headroom has to be inferred from
-`/proc/meminfo` and KGSL sysfs instead of asked for, and any Star Bionic
-memory pooling cannot rely on a budget signal to back off. Worth designing
-around early rather than discovering later.
+> **Superseded for the stack we actually run.** [Turnip does expose
+> `VK_EXT_memory_budget`](03-turnip-capabilities.md), and reports a live
+> budget of **2.80 GiB** against an 8.14 GiB heap. Memory pressure is
+> queryable at runtime after all, and the real figure is far tighter than the
+> heap size suggests. Stage 7 designs against that.
 
 ### 4. Fixed subgroup size 64
 `subgroupSize 64`, `min/max 64 / 64`. No variance, no `subgroupSizeControl`

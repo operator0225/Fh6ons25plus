@@ -34,7 +34,7 @@ device and translation stack rather than on the storefront.
 | Stage | State |
 |---|---|
 | 1 — Environment survey | **done** — S25+ / SM8750 / Adreno830v2 confirmed |
-| 2 — Adreno 830 capabilities | **measured** (vendor driver) — [results](docs/02-adreno830-capabilities.md); Turnip capture still open |
+| 2 — Adreno 830 capabilities | **measured** — [vendor driver](docs/02-adreno830-capabilities.md) and [Turnip in-container](docs/03-turnip-capabilities.md) |
 | 3 — Star Bionic layer | not started — target list now set by Stage 2 |
 | 4 — VKD3D-Proton / DX12 path | not started |
 | 5 — Shader & pipeline cache | not started |
@@ -46,11 +46,13 @@ device and translation stack rather than on the storefront.
 | 12 — Optimisation priority | n/a |
 | 13 — Feature flags | [contract defined](docs/13-feature-flags.md) |
 
-Stage 2 is measured on the vendor driver: **every VKD3D-Proton requirement is
-present, including `textureCompressionBC`**, so capability is not the blocker.
-That relocates the performance question to CPU translation overhead, shader
-compilation, memory bandwidth and thermals. Turnip's own feature set — what
-Winlator will actually run — is still unmeasured and will likely be narrower.
+Stage 2 is measured on both drivers. **Every VKD3D-Proton requirement is
+present on each, including `textureCompressionBC`**, so capability is not the
+blocker. The binding constraint measured so far is **GPU memory: Turnip
+reports a live budget of 2.80 GiB**, dynamic, against a title that expects
+desktop VRAM. The other open hypothesis is that Turnip exposes **a single
+universal queue**, so D3D12's copy and compute queues serialise onto the
+graphics queue — plausible frame-time cost, not yet measured.
 
 ---
 
@@ -65,6 +67,10 @@ Winlator will actually run — is still unmeasured and will likely be narrower.
 - **[docs/02-adreno830-capabilities.md](docs/02-adreno830-capabilities.md)** —
   Stage 2 results measured on the device: what Adreno 830 actually exposes,
   the gaps that shape the plan, and what it does not tell us.
+- **[docs/03-turnip-capabilities.md](docs/03-turnip-capabilities.md)** —
+  **Turnip measured inside Winlator**, the driver the stack actually runs on.
+  Overturns two Stage 2 conclusions, and finds a live GPU memory budget of
+  2.80 GiB plus a single-queue limitation.
 - **[docs/13-feature-flags.md](docs/13-feature-flags.md)** — flag contract.
 
 ---

@@ -40,10 +40,12 @@ guessing:
 | Frame queue latency | the swapchain |
 | GPU memory | no `VK_EXT_memory_budget` on this driver (see Stage 2) |
 
-**GPU memory deserves a note.** Stage 2 measured that Adreno 830's driver does
-not expose `VK_EXT_memory_budget`, so there is no runtime query for GPU memory
-pressure at all — not from inside the container either. System RAM is tracked
-instead, which on a unified-memory SoC is the meaningful number anyway.
+**GPU memory — corrected.** Stage 2 concluded there was no runtime memory
+budget query. That held for the Qualcomm driver; [Turnip exposes
+`VK_EXT_memory_budget`](03-turnip-capabilities.md) and reports a live **2.80
+GiB** budget against an 8.14 GiB heap. It is queryable, from inside the
+container. System RAM is still tracked here, but the Vulkan budget is the
+number that will actually bound the game.
 
 ### Getting FPS — the plan
 
@@ -56,6 +58,14 @@ Three routes, in increasing order of effort and fidelity:
 3. **A Vulkan layer** — a `VK_LAYER` that wraps `vkQueuePresentKHR` and uses
    timestamp queries for true GPU frame time. Highest fidelity and the only
    route to frame queue latency.
+
+**The layer is now a much better deal than when this was written.** The
+[Turnip capture](03-turnip-capabilities.md) shows the container has
+`VK_EXT_pipeline_creation_feedback` (pipeline creation cost, per pipeline),
+`VK_KHR_present_wait` + `VK_KHR_present_id` (real present timing, hence frame
+queue latency), `VK_KHR_calibrated_timestamps` (GPU↔CPU clock correlation)
+and `VK_EXT_memory_budget`. Every metric this section called unreachable is a
+direct query on that driver.
 
 Route 3 is what Stage 2 was checking when it confirmed
 `timestampComputeAndGraphics` and a `timestampPeriod` of 52.0833 ns — a 19.2
