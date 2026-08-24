@@ -53,6 +53,12 @@ if truncated:
     print("\n  *** FILE WAS TRUNCATED -- recovered what was written. ***")
     print("  *** The run did not finish; the container was probably killed. ***")
 print(f"loader   : {d.get('loader_path','?')}   instance API {d.get('instance_api_version','?')}")
+gs0 = d.get("gpu_state_at_start")
+if d.get("kgsl_sysfs_readable") and isinstance(gs0, dict):
+    print(f"gpu state: {gs0.get('gpu_mhz')} MHz  {gs0.get('gpu_temp_c')} C  "
+          f"throttling={gs0.get('throttling')}  busy={gs0.get('gpu_busy_pct')}%")
+elif d.get("kgsl_sysfs_readable") is False:
+    print("gpu state: KGSL sysfs not readable from inside the container")
 if "error" in d:
     print(f"\nERROR: {d['error']}")
     sys.exit(0)
@@ -114,7 +120,12 @@ else:
         else:
             g = v.get("gpu_ms")
             g = f"{g:8.2f}" if isinstance(g, (int, float)) else "     n/a"
-            print(f"  {label:14} wall {v.get('wall_ms', 0):8.2f} ms   gpu {g} ms")
+            st = v.get("gpu_state") or {}
+            extra = ""
+            if st.get("gpu_mhz") is not None:
+                extra = (f"   [{st.get('gpu_mhz')} MHz {st.get('gpu_temp_c')} C"
+                         f" thr={st.get('throttling')}]")
+            print(f"  {label:14} wall {v.get('wall_ms', 0):8.2f} ms   gpu {g} ms{extra}")
     ov = qc.get("overlap_fraction")
     if isinstance(ov, (int, float)):
         print(f"  basis          : {qc.get('overlap_basis')}")
@@ -133,7 +144,7 @@ elif "error" in fl:
 else:
     print(f"  {fl.get('__caveat','')}")
     print(f"  timestamp period: {fl.get('timestamp_period_ns')} ns")
-    print("     groups    avg ms    max ms   spread    fps    60Hz avg/worst")
+    print("     groups    avg ms    max ms   spread    fps    60Hz avg/worst   GPU MHz / C")
     for L in fl.get("levels", []):
         g = L.get("gpu_ms_avg")
         if isinstance(g, (int, float)):
@@ -144,8 +155,11 @@ else:
             fa = L.get("fits_60hz_avg", L.get("fits_60hz_budget"))
             fw = L.get("fits_60hz_worst")
             fw = ("yes" if fw else "NO") if fw is not None else "?"
+            st = L.get("gpu_state_after") or {}
+            gpu = (f"  {st.get('gpu_mhz')} / {st.get('gpu_temp_c')}"
+                   if st.get("gpu_mhz") is not None else "")
             print(f"    {L['workgroups']:8d} {g:9.2f} {mx:9.2f} {sp} "
-                  f"{L.get('implied_fps',0):7.0f}    {'yes' if fa else 'NO':>3} / {fw}")
+                  f"{L.get('implied_fps',0):7.0f}    {'yes' if fa else 'NO':>3} / {fw}{gpu}")
         else:
             print(f"    {L['workgroups']:8d}   (not measured)")
     ct = fl.get("groups_consistently_under_60hz")

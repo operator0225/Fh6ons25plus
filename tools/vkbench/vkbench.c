@@ -151,6 +151,73 @@ static void jstr(const char *k, const char *v)
 static void jnull(const char *k) { jsep(); jesc(k); fputs(": null", stdout); }
 
 /* ------------------------------------------------------------------ */
+/* GPU state from KGSL sysfs                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Everything measured under sustained load varies run to run -- the 65536
+ * level's worst frame moved 14% between two runs while its best frame moved
+ * 0.06%. That is DVFS, and it was invisible because clock and temperature
+ * were never sampled alongside the timings.
+ *
+ * Wine maps the Unix root at Z:, so a Windows binary inside the container can
+ * read Android's sysfs directly. Sampling it here rather than from a separate
+ * Termux process means the readings are in the same process, at the same
+ * instant, as the frame they explain.
+ */
+static int read_sys_long(const char *rel, long *out)
+{
+    char path[512];
+#ifdef _WIN32
+    snprintf(path, sizeof path, "Z:\\%s", rel);
+    for (char *p = path; *p; p++) if (*p == '/') *p = '\\';
+#else
+    snprintf(path, sizeof path, "/%s", rel);
+#endif
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    long v = 0;
+    int ok = fscanf(fp, "%ld", &v) == 1;
+    fclose(fp);
+    if (ok) *out = v;
+    return ok;
+}
+
+#define KGSL "sys/class/kgsl/kgsl-3d0/"
+
+static int gpu_state_available(void)
+{
+    long v;
+    return read_sys_long(KGSL "gpuclk", &v) ||
+           read_sys_long(KGSL "devfreq/cur_freq", &v) ||
+           read_sys_long(KGSL "temp", &v);
+}
+
+/* Emits a {gpu_mhz, gpu_temp_c, throttling, busy_pct} object under `key`.
+ * Anything unreadable is null, never a plausible zero. */
+static void emit_gpu_state(const char *key)
+{
+    long clk = 0, temp = 0, thr = 0, busy = 0;
+    int have_clk = read_sys_long(KGSL "gpuclk", &clk) ||
+                   read_sys_long(KGSL "devfreq/cur_freq", &clk);
+    int have_temp = read_sys_long(KGSL "temp", &temp);
+    int have_thr  = read_sys_long(KGSL "throttling", &thr);
+    int have_busy = read_sys_long(KGSL "gpu_busy_percentage", &busy);
+
+    jobj(key);
+    if (have_clk) {
+        /* gpuclk and devfreq/cur_freq report Hz; some kernels report MHz. */
+        long mhz = clk > 10000000 ? clk / 1000000 : (clk > 10000 ? clk / 1000 : clk);
+        ju32("gpu_mhz", (uint32_t)mhz);
+    } else jnull("gpu_mhz");
+    if (have_temp) jf("gpu_temp_c", temp > 1000 ? temp / 1000.0 : (double)temp);
+    else jnull("gpu_temp_c");
+    if (have_thr)  ju32("throttling", (uint32_t)thr); else jnull("throttling");
+    if (have_busy) ju32("gpu_busy_pct", (uint32_t)busy); else jnull("gpu_busy_pct");
+    jobj_end();
+}
+
+/* ------------------------------------------------------------------ */
 /* loader                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1024,6 +1091,7 @@ static void test_queue_cost(Ctx *c, VkDevice dev, uint32_t gfx_family,
 
     Timing res[3];
     static const char *names[3] = { "render_only", "upload_only", "interleaved" };
+    emit_gpu_state("gpu_state_before");
     for (int mode = 0; mode < 3; mode++) {
         uint32_t nd = (mode == 1) ? 0 : iters;
         uint32_t nc = (mode == 0) ? 0 : iters;
@@ -1069,6 +1137,7 @@ static void test_queue_cost(Ctx *c, VkDevice dev, uint32_t gfx_family,
         }
 
         jobj(names[mode]);
+        emit_gpu_state("gpu_state");
         if (res[mode].ok) {
             jf("wall_ms", res[mode].wall);
             if (res[mode].gpu >= 0) jf("gpu_ms", res[mode].gpu); else jnull("gpu_ms");
@@ -1174,6 +1243,8 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
 
     ju32("frames_per_level", frames);
     jf("timestamp_period_ns", c->props.limits.timestampPeriod);
+    jbool("gpu_state_readable", gpu_state_available());
+    emit_gpu_state("gpu_state_start");
 
     /*
      * Doubling sweep rather than a fixed ladder. A ladder calibrated on one
@@ -1229,6 +1300,7 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
         jobj(NULL);
         ju32("workgroups", groups);
         ju32("frames_counted", counted);
+        emit_gpu_state("gpu_state_after");
         if (counted) {
             jf("wall_ms_avg", wall_sum / counted);
             if (gpu_sum > 0) {
@@ -1428,6 +1500,8 @@ int main(int argc, char **argv)
     PFN_vkGetPhysicalDeviceProperties pGPDP = IFN(GetPhysicalDeviceProperties);
     pGPDP(c.pd, &c.props);
     jstr("device", c.props.deviceName);
+    jbool("kgsl_sysfs_readable", gpu_state_available());
+    emit_gpu_state("gpu_state_at_start");
 
     PFN_vkGetPhysicalDeviceQueueFamilyProperties pQF = IFN(GetPhysicalDeviceQueueFamilyProperties);
     pQF(c.pd, &c.qf_count, NULL);
