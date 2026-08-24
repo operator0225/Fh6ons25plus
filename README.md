@@ -36,23 +36,28 @@ device and translation stack rather than on the storefront.
 | 1 — Environment survey | **done** — S25+ / SM8750 / Adreno830v2 confirmed |
 | 2 — Adreno 830 capabilities | **measured** — [vendor driver](docs/02-adreno830-capabilities.md) and [Turnip in-container](docs/03-turnip-capabilities.md) |
 | 3 — Star Bionic layer | not started — targets now set by measured results |
-| 4 — VKD3D-Proton / DX12 path | **harness built** — [vkbench](docs/04-measurement-harness.md) queue topology test; awaiting device run |
-| 5 — Shader & pipeline cache | **harness built** — cold/warm/seeded pipeline compile benchmark; awaiting device run |
-| 6 — CPU affinity | **thermal throttling measured** — sustained clock is 50% of peak |
-| 7 — Android overhead | **harness built** — memory budget pressure test; awaiting device run |
+| 4 — VKD3D-Proton / DX12 path | **measured** — one usable queue, 0.20–0.51 overlap |
+| 5 — Shader & pipeline cache | **measured** — 55–103x from a seeded blob; two cache layers, both keyed by [star-bionic-run](tools/star-bionic-run) |
+| 6 — CPU affinity | **thermal measured** — [results](docs/06-07-thermal-and-sustained.md); CPU/Box64 side unmeasured |
+| 7 — Android overhead | **memory characterised** — ~7 GiB reachable, budget is an estimate not a cap |
 | 8–9 — Resolution / dynamic res | throughput curve measurable, but short tests read boost clock only |
 | 10 — Profiler | **system-side done** — [docs](docs/10-profiler.md); FPS needs in-container capture |
 | 11 — Benchmark harness | not started |
 | 12 — Optimisation priority | n/a |
 | 13 — Feature flags | [contract defined](docs/13-feature-flags.md) |
 
-Stage 2 is measured on both drivers. **Every VKD3D-Proton requirement is
-present on each, including `textureCompressionBC`**, so capability is not the
-blocker. The binding constraint measured so far is **GPU memory: Turnip
-reports a live budget of 2.80 GiB**, dynamic, against a title that expects
-desktop VRAM. The other open hypothesis is that Turnip exposes **a single
-universal queue**, so D3D12's copy and compute queues serialise onto the
-graphics queue — plausible frame-time cost, not yet measured.
+Capability is not the blocker: every VKD3D-Proton requirement is present on
+Turnip, including `textureCompressionBC`, so FH6's textures need no
+transcoding. Memory reaches ~7 GiB, well past what the first budget reading
+suggested. The single queue costs something but overlaps partially (0.20–0.51).
+
+**The main measured risk is thermal.** The GPU holds 1200 MHz for about
+fifteen seconds, hits 77 °C, and settles at ~600 MHz — sustained clock is half
+of boost. Frame-time spread also collapses from 0.2% to 44% at the load where
+the GPU starts working hard, so consistency fails before throughput does.
+
+**The CPU/Box64 side is entirely unmeasured**, and with GPU headroom available
+it is the plausible next bottleneck.
 
 ---
 
@@ -71,6 +76,11 @@ graphics queue — plausible frame-time cost, not yet measured.
   **Turnip measured inside Winlator**, the driver the stack actually runs on.
   Overturns two Stage 2 conclusions, and finds a live GPU memory budget of
   2.80 GiB plus a single-queue limitation.
+- **[docs/06-07-thermal-and-sustained.md](docs/06-07-thermal-and-sustained.md)** —
+  **the device has three clock regimes and sustained is half of boost.** What
+  that constrains, and an honest read on whether 1080p/High/60 is reachable.
+- **[measurements/RESULTS-2026-08-24.md](measurements/RESULTS-2026-08-24.md)** —
+  the raw measurement record, corrections included.
 - **[docs/13-feature-flags.md](docs/13-feature-flags.md)** — flag contract.
 
 ---
