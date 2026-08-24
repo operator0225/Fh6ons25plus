@@ -53,7 +53,7 @@
 #define BENCH_VERSION "0.1.0"
 #define DEFAULT_PIPELINES 48
 #define DEFAULT_ALLOC_CHUNK_MB 128
-#define DEFAULT_ALLOC_CAP_MB 4096
+#define DEFAULT_ALLOC_CAP_MB 10240
 
 /* ------------------------------------------------------------------ */
 /* timing                                                              */
@@ -584,6 +584,10 @@ static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb
             ju32("allocated_mb", got * chunk_mb);
             ju64("budget_bytes", b);
             ju64("usage_bytes", u);
+            /* budget is usage + estimated remaining, so it RISES as you
+             * allocate. Headroom is the figure that actually falls, and the
+             * one that predicts where allocation stops. */
+            ju64("headroom_bytes", b > u ? b - u : 0);
             jobj_end();
         }
     }
@@ -612,6 +616,11 @@ static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb
     /* Does usage actually track our allocations? If not, the budget is
      * decorative and Stage 7 cannot lean on it. */
     jbool("usage_tracked_allocations", c->have_budget && u1 > u0);
+    ju64("headroom_at_peak_bytes", b1 > u1 ? b1 - u1 : 0);
+    /* The initial budget is an estimate, not a ceiling: exceeding it is
+     * normal and expected. Recording it makes that explicit in the data. */
+    jbool("exceeded_initial_budget",
+          (uint64_t)got * chunk_mb * 1024ull * 1024ull > b0);
 
     jobj_end();
 }
@@ -629,7 +638,7 @@ static void usage_text(void)
       "  --device N        physical device index (default 0)\n"
       "  --pipelines N     pipelines to compile (default 48)\n"
       "  --chunk-mb N      allocation chunk (default 128)\n"
-      "  --cap-mb N        allocation cap (default 4096)\n"
+      "  --cap-mb N        allocation cap (default 10240)\n"
       "  --skip-memory     do not run the allocation test\n"
       "  --out FILE        write JSON here instead of stdout\n"
       "  -h, --help        this text\n",

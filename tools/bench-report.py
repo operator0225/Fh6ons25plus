@@ -77,9 +77,16 @@ else:
     print(f"  hit failure       : {mm.get('hit_allocation_failure')}   hit cap: {mm.get('hit_cap')}")
     print(f"  usage tracked     : {mm.get('usage_tracked_allocations')}"
           "   <- if False the budget is decorative")
+    if mm.get("exceeded_initial_budget"):
+        print("  NOTE: allocated MORE than the initial budget. budget is an")
+        print("        estimate (usage + remaining), not a ceiling.")
+    print("    allocated    budget    usage  headroom")
     for s in mm.get("steps", []):
-        print(f"    {s['allocated_mb']:6d} MB   budget {s['budget_bytes']/GIB:6.2f} GiB"
-              f"   usage {s['usage_bytes']/GIB:6.2f} GiB")
+        hr = s.get("headroom_bytes")
+        hr = f"{hr/GIB:7.2f}" if isinstance(hr, int) else "      ?"
+        print(f"    {s['allocated_mb']:6d} MB {s['budget_bytes']/GIB:8.2f} "
+              f"{s['usage_bytes']/GIB:8.2f} {hr}")
+    print("    (headroom = budget - usage; this is what actually falls)")
     print(f"  after free        : budget {mm.get('budget_after_free_bytes',0)/GIB:.2f} GiB"
           f"   usage {mm.get('usage_after_free_bytes',0)/GIB:.2f} GiB")
 print("=" * 60)
