@@ -23,18 +23,22 @@ if [[ -n "$F" && ! -r "$F" ]]; then
     echo "vkprobe.exe INSIDE the Winlator container:"
     echo "    vkprobe.exe --out Z:\\sdcard\\Download\\caps-turnip.json"
     echo
-    echo "Captures found here:"
-    ls -1 collect-*/caps-*.json /sdcard/Download/caps-*.json 2>/dev/null \
-      | sed 's/^/    /' | head -10 || true
-    ls collect-*/caps-*.json /sdcard/Download/caps-*.json >/dev/null 2>&1 \
-      || echo "    (none)"
+    echo "Captures found:"
+    found=$(find collect-* /sdcard/Download /storage/emulated/0/Download \
+              -maxdepth 4 \( -name 'caps-*.json' -o -name 'vkprobe-caps.json' \) \
+              2>/dev/null | head -10)
+    if [[ -n "$found" ]]; then echo "$found" | sed 's/^/    /'; else echo "    (none)"; fi
   } >&2
   exit 2
 fi
 
 if [[ -z "$F" ]]; then
-  # Convenience: pick the newest android capture if none named.
-  F=$(ls -t collect-*/caps-android.json 2>/dev/null | head -1)
+  # Newest capture, searched a few levels down the usual places. The exe
+  # writes beside itself and people keep it in a subfolder of Downloads, so a
+  # flat glob of /sdcard/Download misses it.
+  F=$(find collect-* /sdcard/Download /storage/emulated/0/Download \
+        -maxdepth 4 -name 'caps-*.json' -o -maxdepth 4 -name 'vkprobe-caps.json' \
+        2>/dev/null | xargs -r ls -t 2>/dev/null | head -1)
 fi
 
 if [[ -z "$F" || ! -r "$F" ]]; then

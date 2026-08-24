@@ -138,10 +138,21 @@ it writes `vkbench-result.json` **beside the exe**, for the same reason
 hands the process is neither chosen nor visible.
 
 ```sh
-# back in Termux
+# back in Termux -- the path is optional
 cd ~/Fh6ons25plus
-./tools/bench-report.py /sdcard/Download/vkbench-result.json
+./tools/bench-report.py
 ```
+
+With no argument it takes the newest `vkbench-result.json` found a few levels
+under Downloads or the working directory, so keeping the exe in a subfolder
+of Downloads works without typing the path. Pass one explicitly to pin a
+specific capture.
+
+**Drive letters inside Winlator.** `D:` is commonly the Downloads folder, so
+an exe at `D:\tools\vkbench.exe` writes its report to `D:\tools\` — which
+is `/sdcard/Download/tools/` from Termux. Separately, `Z:` is the Unix root,
+which is how the benchmark reads KGSL sysfs; that mapping is Wine's and does
+not depend on how `D:` is configured.
 
 Options, if launched with a shell: `--pipelines N`, `--chunk-mb N`,
 `--cap-mb N`, `--skip-memory`, `--out FILE`, `--lib PATH`, `--device N`.

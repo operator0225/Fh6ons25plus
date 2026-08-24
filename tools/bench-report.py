@@ -3,14 +3,44 @@
 """Render a vkbench result as a compact, paste-able summary."""
 import json, re, sys, glob, os
 
+def find_results(name="vkbench-result.json", max_depth=4):
+    """
+    Newest matching file, searched a few levels down the usual places.
+
+    The exe writes its report beside itself, and people keep the exe in a
+    subfolder of Downloads to find it easily -- so a flat glob of
+    /sdcard/Download misses it. Walk, but bounded: Downloads can be large.
+    """
+    roots = ["/sdcard/Download", "/storage/emulated/0/Download",
+             os.getcwd(), os.path.join(os.getcwd(), "measurements")]
+    found = []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        base_depth = root.rstrip(os.sep).count(os.sep)
+        for dirpath, dirnames, filenames in os.walk(root):
+            if dirpath.count(os.sep) - base_depth >= max_depth:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            if name in filenames:
+                found.append(os.path.join(dirpath, name))
+    return sorted(set(found), key=os.path.getmtime, reverse=True)
+
+
 path = sys.argv[1] if len(sys.argv) > 1 else None
+if path and not os.path.isfile(path):
+    sys.exit(f"bench-report: no such file: {path}")
 if not path:
-    c = sorted(glob.glob("/sdcard/Download/vkbench-result.json") +
-               glob.glob("**/vkbench-result.json", recursive=True),
-               key=lambda p: os.path.getmtime(p), reverse=True)
-    path = c[0] if c else None
-if not path or not os.path.isfile(path):
-    sys.exit("usage: bench-report.py <vkbench-result.json>")
+    cands = find_results()
+    if not cands:
+        sys.exit("bench-report: no vkbench-result.json found under Downloads or here.\n"
+                 "  Run vkbench.exe inside Winlator first -- it writes the report\n"
+                 "  beside the exe, wherever you put it.\n"
+                 "  Or pass the path explicitly.")
+    path = cands[0]
+    if len(cands) > 1:
+        print(f"(newest of {len(cands)} found)")
 
 raw = open(path).read()
 try:
