@@ -1368,6 +1368,155 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
 }
 
 /* ------------------------------------------------------------------ */
+/* TEST 6 -- sustained load (soak)                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Everything above runs for a few seconds and then stops, which turned out to
+ * be why four runs disagreed by up to 1.6x. A profiler trace over one of them
+ * showed the GPU at 0% busy and 222 MHz for almost the whole window, with the
+ * die temperature falling 49.2C -> 38.4C from start to finish. The benchmark
+ * never heated anything: the variance came from whatever the phone had been
+ * doing BEFORE the run, and four seconds is nowhere near steady state.
+ *
+ * This holds one load continuously and records every frame, so the throttling
+ * curve shows up in the frame times themselves. That needs no sysfs access
+ * (blocked by Winlator's proot) and no external sampler (1 Hz cannot see a
+ * four-second burst).
+ */
+static void test_soak(Ctx *c, VkDevice dev, uint32_t gfx_family,
+                      uint32_t seconds, uint32_t groups)
+{
+    jobj("soak");
+    ju32("seconds_requested", seconds);
+    ju32("workgroups", groups);
+
+    DevFn f;
+    if (!load_devfn(dev, &f)) { jstr("error", "device entry points unavailable"); jobj_end(); return; }
+
+    PFN_vkGetPhysicalDeviceMemoryProperties pGMP =
+        (PFN_vkGetPhysicalDeviceMemoryProperties)(uintptr_t)
+        p_GIPA(c->inst, "vkGetPhysicalDeviceMemoryProperties");
+    VkPhysicalDeviceMemoryProperties mp;
+    memset(&mp, 0, sizeof mp);
+    pGMP(c->pd, &mp);
+
+    const VkDeviceSize work_bytes = (VkDeviceSize)groups * 64 * sizeof(float);
+    Workload w;
+    if (!workload_create(&f, dev, &mp, 64, work_bytes, 1u * 1024 * 1024, &w)) {
+        jstr("error", "could not build the workload"); jobj_end(); return;
+    }
+
+    VkQueue q = VK_NULL_HANDLE;
+    f.GetDeviceQueue(dev, gfx_family, 0, &q);
+    VkCommandPoolCreateInfo cpci = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = gfx_family,
+    };
+    VkCommandPool pool = VK_NULL_HANDLE;
+    f.CreateCommandPool(dev, &cpci, NULL, &pool);
+
+    uint32_t ts_bits = c->qf[gfx_family].timestampValidBits;
+    VkQueryPool qp = VK_NULL_HANDLE;
+    if (ts_bits) {
+        VkQueryPoolCreateInfo qpci = {
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2,
+        };
+        f.CreateQueryPool(dev, &qpci, NULL, &qp);
+    }
+
+    /* Bucket on the fly rather than keeping every frame: a two-minute soak is
+     * thousands of frames and the shape is what matters, not the raw list. */
+    #define SOAK_BUCKETS 24
+    const double bucket_s = seconds / (double)SOAK_BUCKETS;
+    struct { uint32_t n; double sum, min, max; } b[SOAK_BUCKETS];
+    for (int i = 0; i < SOAK_BUCKETS; i++) { b[i].n = 0; b[i].sum = 0; b[i].min = 1e18; b[i].max = 0; }
+
+    double t_start = now_ms();
+    double deadline = t_start + seconds * 1000.0;
+    uint32_t total_frames = 0;
+
+    while (now_ms() < deadline) {
+        VkCommandBufferAllocateInfo cbai = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        VkCommandBuffer cb = VK_NULL_HANDLE;
+        if (f.AllocateCommandBuffers(dev, &cbai, &cb) != VK_SUCCESS) break;
+        VkCommandBufferBeginInfo bi = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        f.BeginCommandBuffer(cb, &bi);
+        if (qp) {
+            f.CmdResetQueryPool(cb, qp, 0, 2);
+            f.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 0);
+        }
+        record(&f, cb, &w, groups, 1, 0, 0);
+        if (qp) f.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 1);
+        f.EndCommandBuffer(cb);
+
+        double wall = 0, gpu = -1;
+        if (!timed_submit(&f, dev, q, cb, qp, c->props.limits.timestampPeriod,
+                          ts_bits, &wall, &gpu)) break;
+
+        double elapsed_s = (now_ms() - t_start) / 1000.0;
+        int idx = (int)(elapsed_s / bucket_s);
+        if (idx < 0) idx = 0;
+        if (idx >= SOAK_BUCKETS) idx = SOAK_BUCKETS - 1;
+        double v = gpu >= 0 ? gpu : wall;
+        b[idx].n++; b[idx].sum += v;
+        if (v < b[idx].min) b[idx].min = v;
+        if (v > b[idx].max) b[idx].max = v;
+        total_frames++;
+    }
+
+    double actual_s = (now_ms() - t_start) / 1000.0;
+    jf("seconds_actual", actual_s);
+    ju32("frames", total_frames);
+    jbool("gpu_timestamps", ts_bits != 0);
+
+    jarr("buckets");
+    for (int i = 0; i < SOAK_BUCKETS; i++) {
+        if (!b[i].n) continue;
+        jobj(NULL);
+        jf("t_start_s", i * bucket_s);
+        ju32("frames", b[i].n);
+        jf("ms_avg", b[i].sum / b[i].n);
+        jf("ms_min", b[i].min);
+        jf("ms_max", b[i].max);
+        jobj_end();
+    }
+    jarr_end();
+
+    /* First and last populated buckets: the degradation, if any. */
+    int first = -1, last = -1;
+    for (int i = 0; i < SOAK_BUCKETS; i++) if (b[i].n) { if (first < 0) first = i; last = i; }
+    if (first >= 0 && last > first) {
+        double a = b[first].sum / b[first].n;
+        double z = b[last].sum / b[last].n;
+        jf("first_bucket_ms", a);
+        jf("last_bucket_ms", z);
+        jf("degradation_x", a > 0 ? z / a : 0.0);
+        jf("degradation_pct", a > 0 ? (z - a) / a * 100.0 : 0.0);
+        jstr("reading",
+             z > a * 1.15 ? "frame time degrades under sustained load -- thermal or DVFS"
+             : z < a * 0.95 ? "frame time IMPROVES under load -- clocks ramping up, not throttling"
+             : "frame time holds steady across the soak");
+    } else {
+        jnull("degradation_x");
+    }
+
+    if (qp) f.DestroyQueryPool(dev, qp, NULL);
+    f.DestroyCommandPool(dev, pool, NULL);
+    workload_destroy(&f, dev, &w);
+    jobj_end();
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1388,6 +1537,8 @@ static void usage_text(void)
       "  --skip-gpu        do not run the queue-cost / frame-loop tests\n"
       "  --qc-iters N      queue-cost iterations (default 32)\n"
       "  --frames N        frames per load level (default 9)\n"
+      "  --soak N          hold one load for N seconds (default 60, 0 = off)\n"
+      "  --soak-groups N   workgroups for the soak (default 65536)\n"
       "  --out FILE        write JSON here instead of stdout\n"
       "  -h, --help        this text\n",
       stderr);
@@ -1400,6 +1551,9 @@ int main(int argc, char **argv)
     uint32_t chunk_mb = DEFAULT_ALLOC_CHUNK_MB, cap_mb = DEFAULT_ALLOC_CAP_MB;
     uint32_t floor_mb = DEFAULT_HEADROOM_FLOOR_MB;
     uint32_t qc_iters = 32, qc_groups = 1024, qc_copy_mb = 8, frames = 9;
+    /* 60 s at a load near the 60 Hz threshold: long enough to reach steady
+     * state, which four seconds is not. */
+    uint32_t soak_s = 60, soak_groups = 65536;
     int skip_gpu = 0;
     int skip_memory = 0;
 
@@ -1415,6 +1569,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--skip-gpu")) skip_gpu = 1;
         else if (!strcmp(argv[i], "--qc-iters") && i + 1 < argc) qc_iters = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--soak") && i + 1 < argc) soak_s = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--soak-groups") && i + 1 < argc) soak_groups = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage_text(); return 0; }
         else { fprintf(stderr, "vkbench: unknown argument '%s'\n", argv[i]); usage_text(); return 2; }
     }
@@ -1561,9 +1717,12 @@ int main(int argc, char **argv)
     if (!skip_gpu) {
         test_queue_cost(&c, dev, (uint32_t)gfx, qc_iters, qc_groups, qc_copy_mb);
         test_frame_loop(&c, dev, (uint32_t)gfx, frames);
+        if (soak_s) test_soak(&c, dev, (uint32_t)gfx, soak_s, soak_groups);
+        else jnull("soak");
     } else {
         jnull("queue_cost");
         jnull("frame_loop");
+        jnull("soak");
     }
     if (!skip_memory) test_memory(&c, dev, chunk_mb, cap_mb, floor_mb);
     else jnull("memory");

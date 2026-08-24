@@ -201,6 +201,27 @@ else:
         print("  NOTE: the gap between those two is the region where the mean")
         print("        fits 60Hz but individual frames do not.")
 
+sk = d.get("soak")
+print("\n--- SUSTAINED LOAD (Stage 6/7) ---")
+if not isinstance(sk, dict):
+    print("  (skipped)")
+elif "error" in sk:
+    print(f"  ERROR: {sk['error']}")
+else:
+    print(f"  {sk.get('workgroups')} workgroups for {sk.get('seconds_actual',0):.0f}s"
+          f"  -> {sk.get('frames')} frames"
+          f"  (gpu timestamps: {sk.get('gpu_timestamps')})")
+    print("      t(s)  frames    avg ms    min ms    max ms")
+    for b in sk.get("buckets", []):
+        print(f"    {b['t_start_s']:6.1f} {b['frames']:7d} {b['ms_avg']:9.2f}"
+              f" {b['ms_min']:9.2f} {b['ms_max']:9.2f}")
+    dg = sk.get("degradation_pct")
+    if isinstance(dg, (int, float)):
+        print(f"  first bucket {sk['first_bucket_ms']:.2f} ms"
+              f"  ->  last bucket {sk['last_bucket_ms']:.2f} ms"
+              f"   ({dg:+.1f}%)")
+        print(f"  -> {sk.get('reading','')}")
+
 mm = d.get("memory")
 print("\n--- MEMORY (Stage 7) ---")
 if not isinstance(mm, dict):

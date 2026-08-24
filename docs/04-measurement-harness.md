@@ -152,6 +152,28 @@ specific capture.
 an exe at `D:\tools\vkbench.exe` writes its report to `D:\tools\` — which
 is `/sdcard/Download/tools/` from Termux.
 
+## Test 6 — sustained load (Stages 6/7)
+
+Every other test runs for a few seconds and stops, which is why four runs
+disagreed by up to 1.6x. A profiler trace over one of them showed the GPU at
+**0% busy and 222 MHz for almost the entire window**, with die temperature
+falling **49.2 °C → 38.4 °C** from start to finish. The benchmark never heated
+anything. The variance came from whatever the phone had been doing *before*
+the run, and four seconds is nowhere near steady state.
+
+The soak holds one load continuously (default 60 s at 65,536 workgroups, near
+the 60 Hz threshold) and records every frame, bucketed into 24 windows. The
+throttling curve then shows up **in the frame times themselves** — no sysfs
+needed, which matters because Winlator's proot blocks it, and no external
+sampler, which matters because 1 Hz cannot see a four-second burst.
+
+Reports first-bucket vs last-bucket frame time and the degradation, and
+distinguishes three outcomes: degrading (thermal or DVFS), holding steady, or
+*improving* — clocks ramping up rather than throttling down, which the
+lavapipe validation exhibited.
+
+`--soak 0` skips it; `--soak N --soak-groups G` tunes it.
+
 ## GPU clock and temperature: not readable from inside Winlator
 
 The benchmark tries to read KGSL sysfs through `Z:\sys\class\kgsl\...`,
