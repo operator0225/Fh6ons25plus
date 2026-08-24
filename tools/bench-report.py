@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Render a vkbench result as a compact, paste-able summary."""
-import json, sys, glob, os
+import json, re, sys, glob, os
 
 path = sys.argv[1] if len(sys.argv) > 1 else None
 if not path:
@@ -12,7 +12,36 @@ if not path:
 if not path or not os.path.isfile(path):
     sys.exit("usage: bench-report.py <vkbench-result.json>")
 
-d = json.load(open(path))
+raw = open(path).read()
+try:
+    d = json.loads(raw)
+    truncated = False
+except json.JSONDecodeError:
+    # A container killed mid-write leaves valid JSON with the closing
+    # brackets missing. That data is still worth reading, so close the open
+    # structures and say so rather than refusing the file.
+    text = raw.rstrip().rstrip(",")
+    stack, in_str, esc = [], False, False
+    for ch in text:
+        if in_str:
+            if esc:       esc = False
+            elif ch == "\\": esc = True
+            elif ch == '"':  in_str = False
+        elif ch == '"':   in_str = True
+        elif ch in "{[":  stack.append(ch)
+        elif ch in "}]":
+            if stack: stack.pop()
+    if in_str:
+        text += '"'
+    # Drop a dangling `"key":` with no value.
+    text = re.sub(r',?\s*"[^"]*"\s*:\s*$', "", text)
+    text += "".join("}" if c == "{" else "]" for c in reversed(stack))
+    try:
+        d = json.loads(text)
+        truncated = True
+    except json.JSONDecodeError as e:
+        sys.exit(f"bench-report: {path} is not valid JSON and could not be "
+                 f"repaired ({e})")
 GIB = 1 << 30
 
 print("=" * 60)
@@ -20,6 +49,9 @@ print("STAR BIONIC / vkbench")
 print("=" * 60)
 print(f"source   : {path}")
 print(f"device   : {d.get('device','?')}")
+if truncated:
+    print("\n  *** FILE WAS TRUNCATED -- recovered what was written. ***")
+    print("  *** The run did not finish; the container was probably killed. ***")
 print(f"loader   : {d.get('loader_path','?')}   instance API {d.get('instance_api_version','?')}")
 if "error" in d:
     print(f"\nERROR: {d['error']}")

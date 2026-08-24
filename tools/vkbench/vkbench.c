@@ -54,6 +54,15 @@
 #define DEFAULT_PIPELINES 48
 #define DEFAULT_ALLOC_CHUNK_MB 128
 #define DEFAULT_ALLOC_CAP_MB 10240
+/*
+ * Stop while there is still this much headroom left. On Android the failure
+ * mode is NOT a clean VK_ERROR_OUT_OF_DEVICE_MEMORY -- the low-memory killer
+ * takes the whole container first, so "allocate until the driver refuses"
+ * never returns. Measured on an S25+: 7.00 GiB allocated fine at 0.53 GiB
+ * headroom, then the container died. Stopping above that keeps the test
+ * non-destructive while still producing the useful part of the curve.
+ */
+#define DEFAULT_HEADROOM_FLOOR_MB 1024
 
 /* ------------------------------------------------------------------ */
 /* timing                                                              */
@@ -508,7 +517,8 @@ static void query_budget(Ctx *c, PFN_vkGetPhysicalDeviceMemoryProperties2 pGMP2,
  * frees everything. The point is not "how much can we take" -- it is whether
  * the advertised budget corresponds to what is actually obtainable.
  */
-static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb)
+static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb,
+                        uint32_t floor_mb)
 {
     PFN_vkGetPhysicalDeviceMemoryProperties2 pGMP2 =
         (PFN_vkGetPhysicalDeviceMemoryProperties2)(uintptr_t)
@@ -521,6 +531,7 @@ static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb
 
     jobj("memory");
     jbool("memory_budget_extension", c->have_budget);
+    ju32("headroom_floor_mb", floor_mb);
 
     if (!pGMP2 || !pAlloc || !pFree || !pGMP) {
         jstr("error", "required entry points unavailable");
@@ -564,6 +575,8 @@ static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb
     VkDeviceMemory *mem = calloc(max_chunks ? max_chunks : 1, sizeof *mem);
     uint32_t got = 0;
     VkResult last = VK_SUCCESS;
+    int stopped_on_floor = 0;
+    const uint64_t floor_bytes = (uint64_t)floor_mb * 1024ull * 1024ull;
 
     jarr("steps");
     for (uint32_t i = 0; i < max_chunks; i++) {
@@ -576,10 +589,16 @@ static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb
         if (last != VK_SUCCESS) { mem[i] = VK_NULL_HANDLE; break; }
         got++;
 
+        /* Budget is checked EVERY step, not just on reported ones: the floor
+         * is a safety valve and sampling it every 8th chunk could step past
+         * the cliff between checks. */
+        uint64_t b = 0, u = 0;
+        query_budget(c, pGMP2, heap, &b, &u);
+        uint64_t headroom = b > u ? b - u : 0;
+
         /* Report every 8th step; the full curve is noise, the shape is not. */
-        if ((got % 8) == 0 || got == 1) {
-            uint64_t b = 0, u = 0;
-            query_budget(c, pGMP2, heap, &b, &u);
+        if ((got % 8) == 0 || got == 1 ||
+            (c->have_budget && headroom < floor_bytes)) {
             jobj(NULL);
             ju32("allocated_mb", got * chunk_mb);
             ju64("budget_bytes", b);
@@ -587,11 +606,20 @@ static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb
             /* budget is usage + estimated remaining, so it RISES as you
              * allocate. Headroom is the figure that actually falls, and the
              * one that predicts where allocation stops. */
-            ju64("headroom_bytes", b > u ? b - u : 0);
+            ju64("headroom_bytes", headroom);
             jobj_end();
+            /* A killed container loses everything still buffered, so commit
+             * each reported step to the file as it happens. */
+            fflush(stdout);
+        }
+
+        if (c->have_budget && headroom < floor_bytes) {
+            stopped_on_floor = 1;
+            break;
         }
     }
     jarr_end();
+    jbool("stopped_on_headroom_floor", stopped_on_floor);
 
     ju32("allocated_mb_total", got * chunk_mb);
     jf("allocated_gib_total", got * (double)chunk_mb / 1024.0);
@@ -639,6 +667,9 @@ static void usage_text(void)
       "  --pipelines N     pipelines to compile (default 48)\n"
       "  --chunk-mb N      allocation chunk (default 128)\n"
       "  --cap-mb N        allocation cap (default 10240)\n"
+      "  --headroom-floor-mb N  stop with this much headroom left\n"
+      "                    (default 1024; below this Android kills the\n"
+      "                     container rather than failing the allocation)\n"
       "  --skip-memory     do not run the allocation test\n"
       "  --out FILE        write JSON here instead of stdout\n"
       "  -h, --help        this text\n",
@@ -650,6 +681,7 @@ int main(int argc, char **argv)
     const char *libpath = NULL, *outpath = NULL;
     uint32_t devidx = 0, npipe = DEFAULT_PIPELINES;
     uint32_t chunk_mb = DEFAULT_ALLOC_CHUNK_MB, cap_mb = DEFAULT_ALLOC_CAP_MB;
+    uint32_t floor_mb = DEFAULT_HEADROOM_FLOOR_MB;
     int skip_memory = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -659,6 +691,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--pipelines") && i + 1 < argc) npipe = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--chunk-mb") && i + 1 < argc) chunk_mb = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--cap-mb") && i + 1 < argc) cap_mb = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--headroom-floor-mb") && i + 1 < argc) floor_mb = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--skip-memory")) skip_memory = 1;
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage_text(); return 0; }
         else { fprintf(stderr, "vkbench: unknown argument '%s'\n", argv[i]); usage_text(); return 2; }
@@ -801,7 +834,7 @@ int main(int argc, char **argv)
     p_GDPA = IFN(GetDeviceProcAddr);
 
     test_pipelines(&c, dev, npipe);
-    if (!skip_memory) test_memory(&c, dev, chunk_mb, cap_mb);
+    if (!skip_memory) test_memory(&c, dev, chunk_mb, cap_mb, floor_mb);
     else jnull("memory");
 
     PFN_vkDestroyDevice pDD = DFN(DestroyDevice);
