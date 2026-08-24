@@ -95,6 +95,53 @@ else:
         print("  NOTE: cache_hits=0 -- the cache did nothing. Any wall-time")
         print("        drop is warm-up, not caching.")
 
+qc = d.get("queue_cost")
+print("\n--- QUEUE COST (Stage 4) ---")
+if not isinstance(qc, dict):
+    print("  (skipped)")
+elif "error" in qc:
+    print(f"  ERROR: {qc['error']}")
+else:
+    print(f"  iterations {qc.get('iterations')}  groups {qc.get('workgroups_per_dispatch')}"
+          f"  copy {qc.get('copy_mb_per_iteration')} MB/iter"
+          f"  gpu timestamps: {qc.get('gpu_timestamps')}")
+    for k, label in (("render_only", "render only"),
+                     ("upload_only", "upload only"),
+                     ("interleaved", "interleaved")):
+        v = qc.get(k, {})
+        if "error" in v:
+            print(f"  {label:14} ERROR: {v['error']}")
+        else:
+            g = v.get("gpu_ms")
+            g = f"{g:8.2f}" if isinstance(g, (int, float)) else "     n/a"
+            print(f"  {label:14} wall {v.get('wall_ms', 0):8.2f} ms   gpu {g} ms")
+    ov = qc.get("overlap_fraction")
+    if isinstance(ov, (int, float)):
+        print(f"  basis          : {qc.get('overlap_basis')}")
+        print(f"  serial sum     : {qc.get('serial_sum_ms'):8.2f} ms")
+        print(f"  interleaved    : {qc.get('interleaved_ms'):8.2f} ms")
+        print(f"  overlap        : {ov:.3f}   (0 = none, 1 = uploads free)")
+        print(f"  upload cost    : {qc.get('upload_cost_ms'):8.2f} ms on top of render")
+        print(f"  -> {qc.get('reading','')}")
+
+fl = d.get("frame_loop")
+print("\n--- GPU FRAME-TIME CURVE (Stage 8/10) ---")
+if not isinstance(fl, dict):
+    print("  (skipped)")
+elif "error" in fl:
+    print(f"  ERROR: {fl['error']}")
+else:
+    print(f"  {fl.get('__caveat','')}")
+    print(f"  timestamp period: {fl.get('timestamp_period_ns')} ns")
+    print("    groups      gpu ms   implied fps   fits 60Hz")
+    for L in fl.get("levels", []):
+        g = L.get("gpu_ms_avg")
+        if isinstance(g, (int, float)):
+            print(f"    {L['workgroups']:7d} {g:11.2f} {L.get('implied_fps',0):13.1f}"
+                  f"   {'yes' if L.get('fits_60hz_budget') else 'NO'}")
+        else:
+            print(f"    {L['workgroups']:7d}   (not measured)")
+
 mm = d.get("memory")
 print("\n--- MEMORY (Stage 7) ---")
 if not isinstance(mm, dict):

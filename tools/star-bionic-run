@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""
+star-bionic-run -- cache setup, preflight and session monitoring.
+
+WHAT THIS IS NOT: a process launcher. Winlator runs the game inside its own
+Android app; nothing in Termux can set that process's environment. So this
+tool prepares the cache layout and *emits* the environment block for you to
+paste into Winlator's Environment Variables field. Pretending otherwise would
+produce a launcher that silently does nothing.
+
+    ./tools/star-bionic-run setup   [--game FH6]   derive the key, make dirs,
+                                                   print the env block
+    ./tools/star-bionic-run check                  preflight: is the cache key
+                                                   still valid for this driver?
+    ./tools/star-bionic-run monitor [--duration N] profile a session
+    ./tools/star-bionic-run flags                  show the Stage 13 flags
+
+Cache layout, keyed so a driver update cannot silently reuse a stale blob:
+
+    <root>/<key>/mesa/     MESA_SHADER_CACHE_DIR   (driver-level shader cache)
+    <root>/<key>/vkd3d/    VKD3D_SHADER_CACHE_PATH (DX12 pipeline cache)
+    <root>/<key>/dxvk/     DXVK_STATE_CACHE_PATH   (DX11 and earlier)
+    <root>/<key>/key.json  what the key was derived from
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+DEFAULT_ROOT = "/sdcard/star-bionic/cache"
+
+# Stage 13 contract. Everything experimental defaults off.
+FLAGS = [
+    ("STAR_BIONIC_SHADER_CACHE",  "0", "5",  "not implemented"),
+    ("STAR_BIONIC_ASYNC_PIPELINE","0", "5",  "not implemented"),
+    ("STAR_BIONIC_FAST_DESCRIPTOR","0","3",  "not implemented"),
+    ("STAR_BIONIC_FAST_SYNC",     "0", "3",  "not implemented"),
+    ("STAR_BIONIC_MEMORY_POOL",   "0", "3",  "not implemented"),
+    ("STAR_BIONIC_CPU_AFFINITY",  "0", "6",  "not implemented"),
+    ("STAR_BIONIC_DYNAMIC_RES",   "0", "9",  "not implemented"),
+    ("STAR_BIONIC_PROFILER",      "0", "10", "not implemented"),
+]
+
+
+def find_capture(explicit=None):
+    """Newest Turnip capture we can find, or the one named."""
+    if explicit:
+        return explicit if os.path.isfile(explicit) else None
+    cands = []
+    for d in (os.path.join(REPO, "measurements"), "/sdcard/Download", REPO):
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if fn.endswith(".json") and ("caps" in fn or "turnip" in fn or "vkprobe" in fn):
+                cands.append(os.path.join(d, fn))
+    cands.sort(key=os.path.getmtime, reverse=True)
+    for c in cands:
+        try:
+            with open(c) as f:
+                d = json.load(f)
+            if d.get("physical_devices"):
+                return c
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def key_material(capture_path, game):
+    with open(capture_path) as f:
+        d = json.load(f)
+    dev = d["physical_devices"][0]
+    drv = dev.get("driver_properties", {})
+    mat = {
+        "game": game,
+        "deviceName": dev.get("device", {}).get("deviceName"),
+        "driverID": drv.get("driverID"),
+        "driverName": drv.get("driverName"),
+        # Mesa's own shader cache is keyed on the driver build, so a
+        # devel-branch bump must invalidate our directory too.
+        "driverInfo": drv.get("driverInfo"),
+        "apiVersion": dev.get("api", {}).get("apiVersion"),
+        # A pipelineCacheUUID change means every serialised blob is garbage.
+        "pipelineCacheUUID": dev.get("device", {}).get("pipelineCacheUUID")
+                             or dev.get("pipeline_cache", {}).get("pipelineCacheUUID"),
+    }
+    blob = json.dumps(mat, sort_keys=True).encode()
+    mat["key"] = hashlib.sha256(blob).hexdigest()[:16]
+    mat["source_capture"] = os.path.abspath(capture_path)
+    return mat
+
+
+def cmd_setup(args):
+    cap = find_capture(args.capture)
+    if not cap:
+        sys.exit("star-bionic-run: no vkprobe capture found.\n"
+                 "  Run vkprobe.exe inside the Winlator container first --\n"
+                 "  the cache key is derived from the driver it reports.")
+    mat = key_material(cap, args.game)
+    root = os.path.join(args.root, mat["key"])
+
+    if mat["driverID"] != "MESA_TURNIP":
+        print(f"  WARNING: capture is {mat['driverID']}, not MESA_TURNIP.", file=sys.stderr)
+        print("  Winlator normally runs Turnip; a key derived from the vendor", file=sys.stderr)
+        print("  blob will not match what the game actually loads.\n", file=sys.stderr)
+
+    dirs = {k: os.path.join(root, k) for k in ("mesa", "vkd3d", "dxvk")}
+    for p in dirs.values():
+        os.makedirs(p, exist_ok=True)
+    with open(os.path.join(root, "key.json"), "w") as f:
+        json.dump(mat, f, indent=2)
+
+    print(f"cache key : {mat['key']}")
+    print(f"derived   : {mat['driverName']} / {mat['driverInfo']}")
+    print(f"            pipelineCacheUUID {mat['pipelineCacheUUID']}")
+    print(f"root      : {root}")
+    print()
+    print("Paste into Winlator -> container -> Environment Variables:")
+    print()
+    print(f"  MESA_SHADER_CACHE_DIR={dirs['mesa']}")
+    print(f"  MESA_SHADER_CACHE_MAX_SIZE={args.mesa_cache_size}")
+    print(f"  VKD3D_SHADER_CACHE_PATH={dirs['vkd3d']}")
+    print(f"  DXVK_STATE_CACHE_PATH={dirs['dxvk']}")
+    print()
+    print("Notes:")
+    print("  MESA_SHADER_CACHE_DIR is the driver-level cache. Measured 8x on its")
+    print("  own -- it is why a second cold run is faster than the first ever.")
+    print("  VKD3D_SHADER_CACHE_PATH is vkd3d-proton's own DX12 cache; it splits")
+    print("  by exe name, so one directory can serve several games.")
+    print("  Both are keyed above, so a driver update lands in a fresh directory")
+    print("  rather than silently reusing an incompatible blob.")
+
+
+def cmd_check(args):
+    cap = find_capture(args.capture)
+    if not cap:
+        sys.exit("star-bionic-run: no capture found; nothing to check against.")
+    mat = key_material(cap, args.game)
+    root = os.path.join(args.root, mat["key"])
+    stored = os.path.join(root, "key.json")
+
+    print(f"capture      : {cap}")
+    print(f"driver       : {mat['driverID']}  {mat['driverInfo']}")
+    print(f"expected key : {mat['key']}")
+
+    if not os.path.isdir(root):
+        print(f"cache dir    : MISSING ({root})")
+        print("\n-> run 'setup' first.")
+        return 1
+
+    ok = True
+    if os.path.isfile(stored):
+        with open(stored) as f:
+            old = json.load(f)
+        for field in ("driverInfo", "pipelineCacheUUID", "apiVersion"):
+            if old.get(field) != mat.get(field):
+                print(f"  CHANGED {field}: {old.get(field)} -> {mat.get(field)}")
+                ok = False
+    else:
+        print("cache dir    : present but unkeyed (no key.json)")
+        ok = False
+
+    sizes = {}
+    for sub in ("mesa", "vkd3d", "dxvk"):
+        p = os.path.join(root, sub)
+        total = 0
+        for dp, _, fns in os.walk(p):
+            for fn in fns:
+                try:
+                    total += os.path.getsize(os.path.join(dp, fn))
+                except OSError:
+                    pass
+        sizes[sub] = total
+    print("cache sizes  : " + "  ".join(f"{k}={v/1048576:.1f}MB" for k, v in sizes.items()))
+    print("\n-> " + ("cache key matches the current driver."
+                     if ok else "cache is stale for this driver; re-run 'setup'."))
+    return 0 if ok else 1
+
+
+def cmd_monitor(args):
+    prof = os.path.join(HERE, "profiler.py")
+    if not os.path.isfile(prof):
+        sys.exit("star-bionic-run: profiler.py not found")
+    out = args.out or os.path.join(REPO, "runs", "session")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+
+    # Without a wakelock Android suspends Termux the moment Winlator takes
+    # the foreground, which is exactly when the interesting data happens.
+    have_wl = subprocess.call(["sh", "-c", "command -v termux-wake-lock"],
+                              stdout=subprocess.DEVNULL) == 0
+    if have_wl:
+        subprocess.call(["termux-wake-lock"])
+        print("wakelock held")
+    else:
+        print("WARNING: termux-wake-lock not found (pkg install termux-api).")
+        print("         Android will suspend this process once Winlator is in")
+        print("         the foreground, and the run will simply stop.")
+    try:
+        subprocess.call([sys.executable, prof, "--duration", str(args.duration),
+                         "--out", out, "--label", args.label])
+    finally:
+        if have_wl:
+            subprocess.call(["termux-wake-unlock"])
+            print("wakelock released")
+    return 0
+
+
+def cmd_flags(_args):
+    print(f"{'flag':30} {'default':>8}  {'stage':>5}  status")
+    print("-" * 62)
+    for name, default, stage, status in FLAGS:
+        cur = os.environ.get(name)
+        mark = f"  (set to {cur})" if cur is not None and cur != default else ""
+        print(f"{name:30} {default:>8}  {stage:>5}  {status}{mark}")
+    print("\nStage 13: experimental flags default off, are independently")
+    print("togglable, fall back to the plain Vulkan path on failure, and are")
+    print("deleted rather than left at 0 if they do not measurably help.")
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="star-bionic cache setup and session tooling")
+    ap.add_argument("--root", default=DEFAULT_ROOT, help=f"cache root (default {DEFAULT_ROOT})")
+    ap.add_argument("--capture", help="vkprobe JSON to derive the key from")
+    ap.add_argument("--game", default="FH6", help="game id folded into the key")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("setup", help="derive key, create dirs, print env block")
+    s.add_argument("--mesa-cache-size", default="2G")
+    s.set_defaults(fn=cmd_setup)
+
+    sub.add_parser("check", help="verify the cache key still matches the driver").set_defaults(fn=cmd_check)
+
+    m = sub.add_parser("monitor", help="profile a session")
+    m.add_argument("--duration", type=float, default=300)
+    m.add_argument("--out")
+    m.add_argument("--label", default="session")
+    m.set_defaults(fn=cmd_monitor)
+
+    sub.add_parser("flags", help="show Stage 13 feature flags").set_defaults(fn=cmd_flags)
+
+    args = ap.parse_args()
+    sys.exit(args.fn(args) or 0)
+
+
+if __name__ == "__main__":
+    main()

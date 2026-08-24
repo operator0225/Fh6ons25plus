@@ -206,6 +206,300 @@ typedef struct {
 } Ctx;
 
 /* ------------------------------------------------------------------ */
+/* GPU work harness -- shared by the queue-cost and frame-loop tests   */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    PFN_vkGetDeviceQueue        GetDeviceQueue;
+    PFN_vkCreateCommandPool     CreateCommandPool;
+    PFN_vkDestroyCommandPool    DestroyCommandPool;
+    PFN_vkAllocateCommandBuffers AllocateCommandBuffers;
+    PFN_vkBeginCommandBuffer    BeginCommandBuffer;
+    PFN_vkEndCommandBuffer      EndCommandBuffer;
+    PFN_vkQueueSubmit           QueueSubmit;
+    PFN_vkQueueWaitIdle         QueueWaitIdle;
+    PFN_vkDeviceWaitIdle        DeviceWaitIdle;
+    PFN_vkCreateQueryPool       CreateQueryPool;
+    PFN_vkDestroyQueryPool      DestroyQueryPool;
+    PFN_vkCmdResetQueryPool     CmdResetQueryPool;
+    PFN_vkCmdWriteTimestamp     CmdWriteTimestamp;
+    PFN_vkGetQueryPoolResults   GetQueryPoolResults;
+    PFN_vkCreateBuffer          CreateBuffer;
+    PFN_vkDestroyBuffer         DestroyBuffer;
+    PFN_vkGetBufferMemoryRequirements GetBufferMemoryRequirements;
+    PFN_vkBindBufferMemory      BindBufferMemory;
+    PFN_vkAllocateMemory        AllocateMemory;
+    PFN_vkFreeMemory            FreeMemory;
+    PFN_vkCmdCopyBuffer         CmdCopyBuffer;
+    PFN_vkCmdDispatch           CmdDispatch;
+    PFN_vkCmdBindPipeline       CmdBindPipeline;
+    PFN_vkCmdBindDescriptorSets CmdBindDescriptorSets;
+    PFN_vkCmdPipelineBarrier    CmdPipelineBarrier;
+    PFN_vkCreateDescriptorPool  CreateDescriptorPool;
+    PFN_vkDestroyDescriptorPool DestroyDescriptorPool;
+    PFN_vkAllocateDescriptorSets AllocateDescriptorSets;
+    PFN_vkUpdateDescriptorSets  UpdateDescriptorSets;
+    PFN_vkCreateShaderModule    CreateShaderModule;
+    PFN_vkDestroyShaderModule   DestroyShaderModule;
+    PFN_vkCreateDescriptorSetLayout   CreateDescriptorSetLayout;
+    PFN_vkDestroyDescriptorSetLayout  DestroyDescriptorSetLayout;
+    PFN_vkCreatePipelineLayout  CreatePipelineLayout;
+    PFN_vkDestroyPipelineLayout DestroyPipelineLayout;
+    PFN_vkCreateComputePipelines CreateComputePipelines;
+    PFN_vkDestroyPipeline       DestroyPipeline;
+} DevFn;
+
+static int load_devfn(VkDevice dev, DevFn *f)
+{
+#define L(n) f->n = (PFN_vk##n)(uintptr_t)p_GDPA(dev, "vk" #n); if (!f->n) return 0
+    L(GetDeviceQueue); L(CreateCommandPool); L(DestroyCommandPool);
+    L(AllocateCommandBuffers); L(BeginCommandBuffer); L(EndCommandBuffer);
+    L(QueueSubmit); L(QueueWaitIdle); L(DeviceWaitIdle);
+    L(CreateQueryPool); L(DestroyQueryPool); L(CmdResetQueryPool);
+    L(CmdWriteTimestamp); L(GetQueryPoolResults);
+    L(CreateBuffer); L(DestroyBuffer); L(GetBufferMemoryRequirements);
+    L(BindBufferMemory); L(AllocateMemory); L(FreeMemory);
+    L(CmdCopyBuffer); L(CmdDispatch); L(CmdBindPipeline);
+    L(CmdBindDescriptorSets); L(CmdPipelineBarrier);
+    L(CreateDescriptorPool); L(DestroyDescriptorPool);
+    L(AllocateDescriptorSets); L(UpdateDescriptorSets);
+    L(CreateShaderModule); L(DestroyShaderModule);
+    L(CreateDescriptorSetLayout); L(DestroyDescriptorSetLayout);
+    L(CreatePipelineLayout); L(DestroyPipelineLayout);
+    L(CreateComputePipelines); L(DestroyPipeline);
+#undef L
+    return 1;
+}
+
+/* A compute pipeline plus the buffers the workload runs against. */
+typedef struct {
+    VkShaderModule mod;
+    VkDescriptorSetLayout dsl;
+    VkPipelineLayout layout;
+    VkPipeline pipe;
+    VkDescriptorPool pool;
+    VkDescriptorSet set;
+    VkBuffer work, src, dst;
+    VkDeviceMemory work_mem, src_mem, dst_mem;
+    VkDeviceSize copy_bytes;
+    int ok;
+} Workload;
+
+static uint32_t find_mem_type(const VkPhysicalDeviceMemoryProperties *mp,
+                              uint32_t bits, VkMemoryPropertyFlags want)
+{
+    for (uint32_t i = 0; i < mp->memoryTypeCount; i++)
+        if ((bits & (1u << i)) &&
+            (mp->memoryTypes[i].propertyFlags & want) == want)
+            return i;
+    return UINT32_MAX;
+}
+
+static int make_buffer(const DevFn *f, VkDevice dev,
+                       const VkPhysicalDeviceMemoryProperties *mp,
+                       VkDeviceSize size, VkBufferUsageFlags usage,
+                       VkBuffer *buf, VkDeviceMemory *mem)
+{
+    VkBufferCreateInfo bci = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size, .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    if (f->CreateBuffer(dev, &bci, NULL, buf) != VK_SUCCESS) return 0;
+
+    VkMemoryRequirements req;
+    f->GetBufferMemoryRequirements(dev, *buf, &req);
+    uint32_t type = find_mem_type(mp, req.memoryTypeBits,
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type == UINT32_MAX)
+        type = find_mem_type(mp, req.memoryTypeBits,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    if (type == UINT32_MAX) { f->DestroyBuffer(dev, *buf, NULL); *buf = VK_NULL_HANDLE; return 0; }
+
+    VkMemoryAllocateInfo ai = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = req.size, .memoryTypeIndex = type,
+    };
+    if (f->AllocateMemory(dev, &ai, NULL, mem) != VK_SUCCESS) {
+        f->DestroyBuffer(dev, *buf, NULL); *buf = VK_NULL_HANDLE; return 0;
+    }
+    f->BindBufferMemory(dev, *buf, *mem, 0);
+    return 1;
+}
+
+static void workload_destroy(const DevFn *f, VkDevice dev, Workload *w)
+{
+    if (w->pipe)    f->DestroyPipeline(dev, w->pipe, NULL);
+    if (w->pool)    f->DestroyDescriptorPool(dev, w->pool, NULL);
+    if (w->layout)  f->DestroyPipelineLayout(dev, w->layout, NULL);
+    if (w->dsl)     f->DestroyDescriptorSetLayout(dev, w->dsl, NULL);
+    if (w->mod)     f->DestroyShaderModule(dev, w->mod, NULL);
+    if (w->work)    f->DestroyBuffer(dev, w->work, NULL);
+    if (w->src)     f->DestroyBuffer(dev, w->src, NULL);
+    if (w->dst)     f->DestroyBuffer(dev, w->dst, NULL);
+    if (w->work_mem) f->FreeMemory(dev, w->work_mem, NULL);
+    if (w->src_mem)  f->FreeMemory(dev, w->src_mem, NULL);
+    if (w->dst_mem)  f->FreeMemory(dev, w->dst_mem, NULL);
+    memset(w, 0, sizeof *w);
+}
+
+static int workload_create(const DevFn *f, VkDevice dev,
+                           const VkPhysicalDeviceMemoryProperties *mp,
+                           int32_t variant, VkDeviceSize work_bytes,
+                           VkDeviceSize copy_bytes, Workload *w)
+{
+    memset(w, 0, sizeof *w);
+    w->copy_bytes = copy_bytes;
+
+    VkShaderModuleCreateInfo smci = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = sizeof bench_comp_spv, .pCode = bench_comp_spv,
+    };
+    if (f->CreateShaderModule(dev, &smci, NULL, &w->mod) != VK_SUCCESS) goto fail;
+
+    VkDescriptorSetLayoutBinding bind = {
+        .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+    };
+    VkDescriptorSetLayoutCreateInfo dslci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1, .pBindings = &bind,
+    };
+    if (f->CreateDescriptorSetLayout(dev, &dslci, NULL, &w->dsl) != VK_SUCCESS) goto fail;
+
+    VkPipelineLayoutCreateInfo plci = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1, .pSetLayouts = &w->dsl,
+    };
+    if (f->CreatePipelineLayout(dev, &plci, NULL, &w->layout) != VK_SUCCESS) goto fail;
+
+    VkSpecializationMapEntry entry = { 0, 0, sizeof variant };
+    VkSpecializationInfo spec = {
+        .mapEntryCount = 1, .pMapEntries = &entry,
+        .dataSize = sizeof variant, .pData = &variant,
+    };
+    VkComputePipelineCreateInfo cpci = {
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = w->mod,
+            .pName = "main", .pSpecializationInfo = &spec,
+        },
+        .layout = w->layout,
+    };
+    if (f->CreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, NULL, &w->pipe) != VK_SUCCESS)
+        goto fail;
+
+    if (!make_buffer(f, dev, mp, work_bytes,
+                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, &w->work, &w->work_mem)) goto fail;
+    if (!make_buffer(f, dev, mp, copy_bytes,
+                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &w->src, &w->src_mem)) goto fail;
+    if (!make_buffer(f, dev, mp, copy_bytes,
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, &w->dst, &w->dst_mem)) goto fail;
+
+    VkDescriptorPoolSize ps = { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 };
+    VkDescriptorPoolCreateInfo dpci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = 1, .poolSizeCount = 1, .pPoolSizes = &ps,
+    };
+    if (f->CreateDescriptorPool(dev, &dpci, NULL, &w->pool) != VK_SUCCESS) goto fail;
+
+    VkDescriptorSetAllocateInfo dsai = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = w->pool, .descriptorSetCount = 1, .pSetLayouts = &w->dsl,
+    };
+    if (f->AllocateDescriptorSets(dev, &dsai, &w->set) != VK_SUCCESS) goto fail;
+
+    VkDescriptorBufferInfo dbi = { w->work, 0, VK_WHOLE_SIZE };
+    VkWriteDescriptorSet wds = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = w->set, .dstBinding = 0, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &dbi,
+    };
+    f->UpdateDescriptorSets(dev, 1, &wds, 0, NULL);
+
+    w->ok = 1;
+    return 1;
+fail:
+    workload_destroy(f, dev, w);
+    return 0;
+}
+
+/* Records `dispatches` compute dispatches and `copies` buffer copies into one
+ * command buffer, in the order a streaming renderer would issue them. */
+static void record(const DevFn *f, VkCommandBuffer cb, const Workload *w,
+                   uint32_t groups, uint32_t dispatches, uint32_t copies,
+                   int interleave)
+{
+    VkMemoryBarrier bar = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT,
+    };
+    VkBufferCopy region = { 0, 0, w->copy_bytes };
+    uint32_t n = dispatches > copies ? dispatches : copies;
+
+    if (dispatches) {
+        f->CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, w->pipe);
+        f->CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, w->layout,
+                                 0, 1, &w->set, 0, NULL);
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        if (i < dispatches) {
+            f->CmdDispatch(cb, groups, 1, 1);
+            if (interleave)
+                f->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                      VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                      1, &bar, 0, NULL, 0, NULL);
+        }
+        if (i < copies) {
+            f->CmdCopyBuffer(cb, w->src, w->dst, 1, &region);
+            if (interleave)
+                f->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                                      1, &bar, 0, NULL, 0, NULL);
+        }
+    }
+}
+
+/*
+ * Submits one command buffer and returns wall time, plus GPU time from
+ * timestamp queries when the queue supports them. Returns 0 on failure so a
+ * caller can report "not measured" instead of a fabricated number.
+ */
+static int timed_submit(const DevFn *f, VkDevice dev, VkQueue q,
+                        VkCommandBuffer cb, VkQueryPool qp, float ts_period,
+                        uint32_t ts_valid_bits,
+                        double *wall_ms, double *gpu_ms)
+{
+    VkCommandBufferBeginInfo bi = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    (void)bi;
+    VkSubmitInfo si = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                        .commandBufferCount = 1, .pCommandBuffers = &cb };
+
+    double t0 = now_ms();
+    if (f->QueueSubmit(q, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS) return 0;
+    if (f->QueueWaitIdle(q) != VK_SUCCESS) return 0;
+    *wall_ms = now_ms() - t0;
+
+    *gpu_ms = -1.0;
+    if (qp && ts_valid_bits) {
+        uint64_t ts[2] = { 0, 0 };
+        if (f->GetQueryPoolResults(dev, qp, 0, 2, sizeof ts, ts, sizeof ts[0],
+                                   VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT)
+            == VK_SUCCESS) {
+            uint64_t mask = ts_valid_bits >= 64 ? ~0ull : ((1ull << ts_valid_bits) - 1);
+            uint64_t d = (ts[1] & mask) - (ts[0] & mask);
+            *gpu_ms = (double)d * (double)ts_period / 1e6;
+        }
+    }
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
 /* TEST 1 -- queue topology                                            */
 /* ------------------------------------------------------------------ */
 
@@ -654,6 +948,298 @@ static void test_memory(Ctx *c, VkDevice dev, uint32_t chunk_mb, uint32_t cap_mb
 }
 
 /* ------------------------------------------------------------------ */
+/* TEST 4 -- what the single queue actually costs                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Stage 4's hypothesis says D3D12's copy queue cannot overlap the direct
+ * queue here, because there is only one. This turns that into a number.
+ *
+ * Three measurements on the same queue:
+ *   R  compute dispatches alone      (stands in for frame render work)
+ *   U  buffer copies alone           (stands in for texture streaming)
+ *   I  both, interleaved
+ *
+ * If I == R + U the two cannot overlap at all and the copies cost full
+ * wall-clock time. If I < R + U the driver is pipelining them despite the
+ * single queue, and the cost is smaller than the topology suggests.
+ *
+ * This is a synthetic proxy, not FH6. It bounds the effect; it does not
+ * predict the game's frame time.
+ */
+typedef struct { double wall, gpu; int ok; } Timing;
+
+static void test_queue_cost(Ctx *c, VkDevice dev, uint32_t gfx_family,
+                            uint32_t iters, uint32_t groups, uint32_t copy_mb)
+{
+    jobj("queue_cost");
+
+    DevFn f;
+    if (!load_devfn(dev, &f)) {
+        jstr("error", "device entry points unavailable"); jobj_end(); return;
+    }
+
+    PFN_vkGetPhysicalDeviceMemoryProperties pGMP =
+        (PFN_vkGetPhysicalDeviceMemoryProperties)(uintptr_t)
+        p_GIPA(c->inst, "vkGetPhysicalDeviceMemoryProperties");
+    VkPhysicalDeviceMemoryProperties mp;
+    memset(&mp, 0, sizeof mp);
+    pGMP(c->pd, &mp);
+
+    const VkDeviceSize copy_bytes = (VkDeviceSize)copy_mb * 1024 * 1024;
+    Workload w;
+    if (!workload_create(&f, dev, &mp, 64, 16u * 1024 * 1024, copy_bytes, &w)) {
+        jstr("error", "could not build the workload (allocation failed?)");
+        jobj_end(); return;
+    }
+
+    VkQueue q = VK_NULL_HANDLE;
+    f.GetDeviceQueue(dev, gfx_family, 0, &q);
+
+    VkCommandPoolCreateInfo cpci = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = gfx_family,
+    };
+    VkCommandPool pool = VK_NULL_HANDLE;
+    if (f.CreateCommandPool(dev, &cpci, NULL, &pool) != VK_SUCCESS) {
+        jstr("error", "vkCreateCommandPool failed");
+        workload_destroy(&f, dev, &w); jobj_end(); return;
+    }
+
+    uint32_t ts_bits = c->qf[gfx_family].timestampValidBits;
+    VkQueryPool qp = VK_NULL_HANDLE;
+    if (ts_bits) {
+        VkQueryPoolCreateInfo qpci = {
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2,
+        };
+        f.CreateQueryPool(dev, &qpci, NULL, &qp);
+    }
+
+    ju32("iterations", iters);
+    ju32("workgroups_per_dispatch", groups);
+    ju32("copy_mb_per_iteration", copy_mb);
+    jbool("gpu_timestamps", ts_bits != 0);
+
+    Timing res[3];
+    static const char *names[3] = { "render_only", "upload_only", "interleaved" };
+    for (int mode = 0; mode < 3; mode++) {
+        uint32_t nd = (mode == 1) ? 0 : iters;
+        uint32_t nc = (mode == 0) ? 0 : iters;
+
+        VkCommandBufferAllocateInfo cbai = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        /*
+         * Each mode is submitted twice and only the second is measured. The
+         * modes run in sequence, so without this the first one absorbs all
+         * the warm-up -- caches, clocks, first-touch page faults -- and the
+         * later ones look artificially fast. A validation run on lavapipe
+         * had "interleaved" beating "render_only" while doing strictly more
+         * work, which is how this was caught.
+         */
+        res[mode].ok = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            if (f.AllocateCommandBuffers(dev, &cbai, &cb) != VK_SUCCESS) break;
+            VkCommandBufferBeginInfo bi = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            };
+            f.BeginCommandBuffer(cb, &bi);
+            if (qp) {
+                f.CmdResetQueryPool(cb, qp, 0, 2);
+                f.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 0);
+            }
+            record(&f, cb, &w, groups, nd, nc, mode == 2);
+            if (qp) f.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 1);
+            f.EndCommandBuffer(cb);
+
+            double wall = 0, gpu = -1;
+            int ok = timed_submit(&f, dev, q, cb, qp, c->props.limits.timestampPeriod,
+                                  ts_bits, &wall, &gpu);
+            if (pass == 1) {
+                res[mode].ok = ok;
+                res[mode].wall = wall;
+                res[mode].gpu = gpu;
+            }
+        }
+
+        jobj(names[mode]);
+        if (res[mode].ok) {
+            jf("wall_ms", res[mode].wall);
+            if (res[mode].gpu >= 0) jf("gpu_ms", res[mode].gpu); else jnull("gpu_ms");
+        } else {
+            jstr("error", "submit failed");
+        }
+        jobj_end();
+    }
+
+    if (res[0].ok && res[1].ok && res[2].ok) {
+        /* GPU time when we have it: it excludes CPU-side submit overhead,
+         * which is not what this test is about. */
+        int use_gpu = res[0].gpu >= 0 && res[1].gpu >= 0 && res[2].gpu >= 0;
+        double r = use_gpu ? res[0].gpu : res[0].wall;
+        double u = use_gpu ? res[1].gpu : res[1].wall;
+        double serial = r + u;
+        double actual = use_gpu ? res[2].gpu : res[2].wall;
+        jstr("overlap_basis", use_gpu ? "gpu_ms" : "wall_ms");
+        jf("serial_sum_ms", serial);
+        jf("interleaved_ms", actual);
+        /* 0 = no overlap whatsoever; 1 = uploads were entirely free. */
+        double overlap = serial > 0 ? (serial - actual) / serial : 0.0;
+        jf("overlap_fraction", overlap < 0 ? 0.0 : overlap);
+        jf("upload_cost_ms", actual - r);
+        jstr("reading",
+             actual > serial * 1.05
+             ? "worse than serial: no overlap, and the barriers between "
+               "dispatch and copy cost extra on top"
+             : overlap < 0.05
+             ? "no overlap: uploads cost their full time on top of render"
+             : "partial overlap: the driver pipelines despite the single queue");
+    } else {
+        jnull("overlap_fraction");
+    }
+
+    if (qp) f.DestroyQueryPool(dev, qp, NULL);
+    f.DestroyCommandPool(dev, pool, NULL);
+    workload_destroy(&f, dev, &w);
+    jobj_end();
+}
+
+/* ------------------------------------------------------------------ */
+/* TEST 5 -- GPU frame-time curve                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Sweeps GPU load and reports measured GPU time per "frame", so the load at
+ * which this device falls under a 60 Hz budget can be read off directly.
+ *
+ * OFFSCREEN AND SYNTHETIC. There is no swapchain, no vsync, no compositor,
+ * and compute dispatches are not a game frame. It measures the timestamp
+ * path and the GPU's raw throughput curve -- not presented FPS.
+ */
+static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
+                            uint32_t frames)
+{
+    jobj("frame_loop");
+    jstr("__caveat",
+         "offscreen compute, no swapchain or vsync: this is a GPU throughput "
+         "curve and the timestamp path, not presented FPS");
+
+    DevFn f;
+    if (!load_devfn(dev, &f)) { jstr("error", "device entry points unavailable"); jobj_end(); return; }
+
+    PFN_vkGetPhysicalDeviceMemoryProperties pGMP =
+        (PFN_vkGetPhysicalDeviceMemoryProperties)(uintptr_t)
+        p_GIPA(c->inst, "vkGetPhysicalDeviceMemoryProperties");
+    VkPhysicalDeviceMemoryProperties mp;
+    memset(&mp, 0, sizeof mp);
+    pGMP(c->pd, &mp);
+
+    Workload w;
+    if (!workload_create(&f, dev, &mp, 64, 16u * 1024 * 1024, 1u * 1024 * 1024, &w)) {
+        jstr("error", "could not build the workload"); jobj_end(); return;
+    }
+
+    VkQueue q = VK_NULL_HANDLE;
+    f.GetDeviceQueue(dev, gfx_family, 0, &q);
+    VkCommandPoolCreateInfo cpci = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = gfx_family,
+    };
+    VkCommandPool pool = VK_NULL_HANDLE;
+    f.CreateCommandPool(dev, &cpci, NULL, &pool);
+
+    uint32_t ts_bits = c->qf[gfx_family].timestampValidBits;
+    VkQueryPool qp = VK_NULL_HANDLE;
+    if (ts_bits) {
+        VkQueryPoolCreateInfo qpci = {
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 2,
+        };
+        f.CreateQueryPool(dev, &qpci, NULL, &qp);
+    }
+
+    ju32("frames_per_level", frames);
+    jf("timestamp_period_ns", c->props.limits.timestampPeriod);
+
+    static const uint32_t levels[] = { 64, 256, 1024, 4096, 16384 };
+    jarr("levels");
+    for (size_t li = 0; li < sizeof levels / sizeof *levels; li++) {
+        uint32_t groups = levels[li];
+        double gpu_sum = 0, wall_sum = 0;
+        double gpu_min = 1e18, gpu_max = 0;
+        uint32_t counted = 0;
+
+        for (uint32_t fr = 0; fr < frames; fr++) {
+            VkCommandBufferAllocateInfo cbai = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
+            };
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            if (f.AllocateCommandBuffers(dev, &cbai, &cb) != VK_SUCCESS) break;
+            VkCommandBufferBeginInfo bi = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            };
+            f.BeginCommandBuffer(cb, &bi);
+            if (qp) {
+                f.CmdResetQueryPool(cb, qp, 0, 2);
+                f.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, qp, 0);
+            }
+            record(&f, cb, &w, groups, 1, 0, 0);
+            if (qp) f.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 1);
+            f.EndCommandBuffer(cb);
+
+            double wall = 0, gpu = -1;
+            if (!timed_submit(&f, dev, q, cb, qp, c->props.limits.timestampPeriod,
+                              ts_bits, &wall, &gpu)) break;
+            /* Discard the first iteration: it carries warm-up, not frame cost. */
+            if (fr == 0) continue;
+            wall_sum += wall; counted++;
+            if (gpu >= 0) {
+                gpu_sum += gpu;
+                if (gpu < gpu_min) gpu_min = gpu;
+                if (gpu > gpu_max) gpu_max = gpu;
+            }
+        }
+
+        jobj(NULL);
+        ju32("workgroups", groups);
+        ju32("frames_counted", counted);
+        if (counted) {
+            jf("wall_ms_avg", wall_sum / counted);
+            if (gpu_sum > 0) {
+                double avg = gpu_sum / counted;
+                jf("gpu_ms_avg", avg);
+                jf("gpu_ms_min", gpu_min);
+                jf("gpu_ms_max", gpu_max);
+                jf("implied_fps", avg > 0 ? 1000.0 / avg : 0.0);
+                jbool("fits_60hz_budget", avg <= 16.67);
+            } else {
+                jnull("gpu_ms_avg");
+            }
+        } else {
+            jstr("error", "no frames completed");
+        }
+        jobj_end();
+        fflush(stdout);
+    }
+    jarr_end();
+
+    if (qp) f.DestroyQueryPool(dev, qp, NULL);
+    f.DestroyCommandPool(dev, pool, NULL);
+    workload_destroy(&f, dev, &w);
+    jobj_end();
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -671,6 +1257,9 @@ static void usage_text(void)
       "                    (default 1024; below this Android kills the\n"
       "                     container rather than failing the allocation)\n"
       "  --skip-memory     do not run the allocation test\n"
+      "  --skip-gpu        do not run the queue-cost / frame-loop tests\n"
+      "  --qc-iters N      queue-cost iterations (default 32)\n"
+      "  --frames N        frames per load level (default 9)\n"
       "  --out FILE        write JSON here instead of stdout\n"
       "  -h, --help        this text\n",
       stderr);
@@ -682,6 +1271,8 @@ int main(int argc, char **argv)
     uint32_t devidx = 0, npipe = DEFAULT_PIPELINES;
     uint32_t chunk_mb = DEFAULT_ALLOC_CHUNK_MB, cap_mb = DEFAULT_ALLOC_CAP_MB;
     uint32_t floor_mb = DEFAULT_HEADROOM_FLOOR_MB;
+    uint32_t qc_iters = 32, qc_groups = 1024, qc_copy_mb = 8, frames = 9;
+    int skip_gpu = 0;
     int skip_memory = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -693,6 +1284,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--cap-mb") && i + 1 < argc) cap_mb = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--headroom-floor-mb") && i + 1 < argc) floor_mb = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--skip-memory")) skip_memory = 1;
+        else if (!strcmp(argv[i], "--skip-gpu")) skip_gpu = 1;
+        else if (!strcmp(argv[i], "--qc-iters") && i + 1 < argc) qc_iters = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage_text(); return 0; }
         else { fprintf(stderr, "vkbench: unknown argument '%s'\n", argv[i]); usage_text(); return 2; }
     }
@@ -834,6 +1428,13 @@ int main(int argc, char **argv)
     p_GDPA = IFN(GetDeviceProcAddr);
 
     test_pipelines(&c, dev, npipe);
+    if (!skip_gpu) {
+        test_queue_cost(&c, dev, (uint32_t)gfx, qc_iters, qc_groups, qc_copy_mb);
+        test_frame_loop(&c, dev, (uint32_t)gfx, frames);
+    } else {
+        jnull("queue_cost");
+        jnull("frame_loop");
+    }
     if (!skip_memory) test_memory(&c, dev, chunk_mb, cap_mb, floor_mb);
     else jnull("memory");
 

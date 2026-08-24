@@ -35,12 +35,12 @@ device and translation stack rather than on the storefront.
 |---|---|
 | 1 — Environment survey | **done** — S25+ / SM8750 / Adreno830v2 confirmed |
 | 2 — Adreno 830 capabilities | **measured** — [vendor driver](docs/02-adreno830-capabilities.md) and [Turnip in-container](docs/03-turnip-capabilities.md) |
-| 3 — Star Bionic layer | not started — target list now set by Stage 2 |
+| 3 — Star Bionic layer | not started — targets now set by measured results |
 | 4 — VKD3D-Proton / DX12 path | **harness built** — [vkbench](docs/04-measurement-harness.md) queue topology test; awaiting device run |
 | 5 — Shader & pipeline cache | **harness built** — cold/warm/seeded pipeline compile benchmark; awaiting device run |
 | 6 — CPU affinity | not started |
 | 7 — Android overhead | **harness built** — memory budget pressure test; awaiting device run |
-| 8–9 — Resolution / dynamic res | not started |
+| 8–9 — Resolution / dynamic res | **GPU throughput curve** measurable via vkbench frame loop |
 | 10 — Profiler | **system-side done** — [docs](docs/10-profiler.md); FPS needs in-container capture |
 | 11 — Benchmark harness | not started |
 | 12 — Optimisation priority | n/a |
@@ -142,6 +142,21 @@ cp tools/vkbench/prebuilt/vkbench.exe ~/storage/downloads/   # then run in Winla
 ```
 
 See [docs/04-measurement-harness.md](docs/04-measurement-harness.md).
+
+### `tools/star-bionic-run` — cache setup, preflight, session monitoring
+
+```sh
+./tools/star-bionic-run setup    # derive cache key, make dirs, print env block
+./tools/star-bionic-run check    # is the cache still valid for this driver?
+./tools/star-bionic-run monitor  # profile a session, holding a wakelock
+./tools/star-bionic-run flags    # Stage 13 flag status
+```
+
+**Not a process launcher.** Winlator runs the game inside its own Android
+app, and nothing in Termux can set that process's environment — so this
+derives the cache key from the driver capture, creates the directories, and
+*emits* the environment block to paste into Winlator. A driver update changes
+the key, so a stale blob cannot be silently reused.
 
 ### `tools/vkprobe/` — Vulkan capability probe
 

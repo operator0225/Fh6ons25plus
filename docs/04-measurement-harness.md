@@ -91,6 +91,39 @@ before exit. `--skip-memory` opts out.
 
 ---
 
+## Test 4 — what the single queue costs (Stage 4)
+
+Turns the confirmed single-queue topology into a number. Three measurements
+on the same queue: compute dispatches alone (`render_only`), buffer copies
+alone (`upload_only`), and both interleaved. If interleaved equals the sum,
+nothing overlapped and uploads cost their full time on top of rendering.
+
+GPU time from timestamp queries is preferred over wall time, since CPU submit
+overhead is not what the test is about.
+
+**Each mode is submitted twice and only the second is measured.** The modes
+run in sequence, so without a warm-up pass the first absorbs cache misses,
+clock ramp and first-touch faults while later ones look artificially fast.
+The lavapipe validation had `interleaved` beating `render_only` while doing
+strictly more work — impossible, and how the confound was caught.
+
+Synthetic proxy, not FH6. It bounds the effect; it does not predict the
+game's frame time.
+
+## Test 5 — GPU frame-time curve (Stages 8/10)
+
+Sweeps GPU load across five levels and reports measured GPU time per frame
+plus implied FPS, so the load at which this device drops under a 60 Hz budget
+can be read directly.
+
+**Offscreen and synthetic.** No swapchain, no vsync, no compositor, and
+compute dispatches are not a game frame. This measures the timestamp path and
+the GPU's raw throughput curve — not presented FPS. The swapchain path stays
+unwritten because it cannot be validated without a display, and shipping
+unvalidated code to the device has gone badly before.
+
+The first iteration at each level is discarded as warm-up.
+
 ## Use
 
 ```sh
