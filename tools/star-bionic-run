@@ -13,6 +13,8 @@ produce a launcher that silently does nothing.
                                                    print the env block
     ./tools/star-bionic-run check                  preflight: is the cache key
                                                    still valid for this driver?
+    ./tools/star-bionic-run thermal [--wait]       is the device cool enough
+                                                   to produce comparable numbers?
     ./tools/star-bionic-run monitor [--duration N] profile a session
     ./tools/star-bionic-run flags                  show the Stage 13 flags
 
@@ -214,6 +216,71 @@ def cmd_monitor(args):
     return 0
 
 
+# Measured on this device: full clock held to 77.2 C, then halved. Steady
+# state afterwards sat near 50 C. A run starting above that is already
+# throttled and its numbers are not comparable with one starting cold.
+KGSL = "/sys/class/kgsl/kgsl-3d0/"
+READY_C, WARM_C = 45.0, 55.0
+
+
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def gpu_now():
+    t = _read(KGSL + "temp")
+    c = _read(KGSL + "gpuclk") or _read(KGSL + "devfreq/cur_freq")
+    temp = mhz = None
+    if t and t.lstrip("-").isdigit():
+        v = int(t)
+        temp = v / 1000.0 if abs(v) > 1000 else float(v)
+    if c and c.isdigit():
+        v = int(c)
+        mhz = v // 1_000_000 if v > 10_000_000 else (v // 1000 if v > 10_000 else v)
+    return temp, mhz
+
+
+def cmd_thermal(args):
+    temp, mhz = gpu_now()
+    if temp is None:
+        print("gpu temperature not readable (" + KGSL + "temp)")
+        return 1
+
+    def verdict(t):
+        return ("READY  -- comparable with a cold-start run" if t < READY_C
+                else "WARM   -- already partly throttled; numbers will differ"
+                if t < WARM_C
+                else "HOT    -- throttled. Wait, or the run measures nothing useful")
+
+    print(f"gpu temp  : {temp:.1f} C   clock: {mhz if mhz is not None else '?'} MHz")
+    print(f"verdict   : {verdict(temp)}")
+    print(f"thresholds: ready < {READY_C} C, warm < {WARM_C} C")
+
+    if not args.wait:
+        return 0 if temp < WARM_C else 1
+
+    import time
+    print(f"\nwaiting for < {READY_C} C (Ctrl-C to stop)...")
+    try:
+        while True:
+            temp, mhz = gpu_now()
+            if temp is None:
+                return 1
+            print(f"\r  {temp:5.1f} C   {mhz if mhz is not None else '?'} MHz     ",
+                  end="", flush=True)
+            if temp < READY_C:
+                print("\n-> ready.")
+                return 0
+            time.sleep(5)
+    except KeyboardInterrupt:
+        print("\n-> stopped.")
+        return 1
+
+
 def cmd_flags(_args):
     print(f"{'flag':30} {'default':>8}  {'stage':>5}  status")
     print("-" * 62)
@@ -245,6 +312,10 @@ def main():
     m.add_argument("--out")
     m.add_argument("--label", default="session")
     m.set_defaults(fn=cmd_monitor)
+
+    t = sub.add_parser("thermal", help="is the device cool enough to benchmark?")
+    t.add_argument("--wait", action="store_true", help="block until it cools")
+    t.set_defaults(fn=cmd_thermal)
 
     sub.add_parser("flags", help="show Stage 13 feature flags").set_defaults(fn=cmd_flags)
 

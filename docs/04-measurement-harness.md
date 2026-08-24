@@ -161,18 +161,45 @@ falling **49.2 °C → 38.4 °C** from start to finish. The benchmark never heat
 anything. The variance came from whatever the phone had been doing *before*
 the run, and four seconds is nowhere near steady state.
 
-The soak holds one load continuously (default 60 s at 65,536 workgroups, near
-the 60 Hz threshold) and records every frame, bucketed into 24 windows. The
-throttling curve then shows up **in the frame times themselves** — no sysfs
-needed, which matters because Winlator's proot blocks it, and no external
-sampler, which matters because 1 Hz cannot see a four-second burst.
+The soak holds a load continuously and records every frame, bucketed into 24
+windows. The throttling curve shows up **in the frame times themselves** — no
+sysfs needed, which matters because Winlator's proot blocks it, and no
+external sampler, which matters because 1 Hz cannot see a four-second burst.
 
-Reports first-bucket vs last-bucket frame time and the degradation, and
-distinguishes three outcomes: degrading (thermal or DVFS), holding steady, or
-*improving* — clocks ramping up rather than throttling down, which the
-lavapipe validation exhibited.
+It runs a **ladder** of loads (default 16,384 / 65,536 / 131,072 at 45 s each)
+**back to back with no cool-down**. That is deliberate: a game keeps the
+device hot, so what matters is what each load sustains on an already-warm
+phone, not what it manages from cold.
 
-`--soak 0` skips it; `--soak N --soak-groups G` tunes it.
+Per level it reports `peak_ms` (first bucket, boost clock) and
+**`sustained_ms`** — the mean over the last third, past the ~37 s at which
+throttling settled when measured. Across levels it interpolates
+**`sustained_groups_at_60hz`**: the load the GPU holds inside 16.67 ms *after*
+throttling.
+
+**That is the planning number.** `frame_loop`'s threshold is boost clock and
+runs for a fraction of a second; on this device the two differ by roughly 2x.
+
+Three outcomes are distinguished: degrading (thermal or DVFS), steady, or
+*improving* — clocks ramping up rather than throttling down, which both the
+lavapipe validation and the lighter ladder levels exhibit. A naive "slower
+means throttling" reading would mislabel those.
+
+`--soak 0` skips it; `--soak N --soak-loads A,B,C` tunes it.
+
+## Benchmarking a warm device measures nothing comparable
+
+Because full clock only holds for about fifteen seconds, a run starting warm
+is already throttled and its numbers cannot be compared with one starting
+cold. That single fact accounts for the 1.6x spread across four early runs.
+
+```sh
+./tools/star-bionic-run thermal          # ready / warm / hot
+./tools/star-bionic-run thermal --wait   # block until it cools
+```
+
+Thresholds come from the measurement: full clock held to **77.2 °C**, then
+halved; steady state settled near **50 °C**. Ready is under 45 °C.
 
 ## GPU clock and temperature: not readable from inside Winlator
 

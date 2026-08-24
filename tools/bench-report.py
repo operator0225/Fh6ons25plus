@@ -213,19 +213,35 @@ if not isinstance(sk, dict):
 elif "error" in sk:
     print(f"  ERROR: {sk['error']}")
 else:
-    print(f"  {sk.get('workgroups')} workgroups for {sk.get('seconds_actual',0):.0f}s"
-          f"  -> {sk.get('frames')} frames"
-          f"  (gpu timestamps: {sk.get('gpu_timestamps')})")
-    print("      t(s)  frames    avg ms    min ms    max ms")
-    for b in sk.get("buckets", []):
-        print(f"    {b['t_start_s']:6.1f} {b['frames']:7d} {b['ms_avg']:9.2f}"
-              f" {b['ms_min']:9.2f} {b['ms_max']:9.2f}")
-    dg = sk.get("degradation_pct")
-    if isinstance(dg, (int, float)):
-        print(f"  first bucket {sk['first_bucket_ms']:.2f} ms"
-              f"  ->  last bucket {sk['last_bucket_ms']:.2f} ms"
-              f"   ({dg:+.1f}%)")
-        print(f"  -> {sk.get('reading','')}")
+    levels = sk.get("levels")
+    if levels is None:                      # single-soak captures predate the ladder
+        levels = [sk]
+        print(f"  {sk.get('workgroups')} workgroups for {sk.get('seconds_actual',0):.0f}s")
+    else:
+        print(f"  {sk.get('seconds_per_level')}s per level, back to back "
+              "(no cool-down: a game keeps the device hot)")
+    print("     groups   frames    peak ms  sustained    fps   60Hz   change")
+    for L in levels:
+        print(f"    {L.get('workgroups',0):7d} {L.get('frames',0):8d}"
+              f" {L.get('peak_ms',0):10.2f} {L.get('sustained_ms',0):10.2f}"
+              f" {L.get('sustained_fps',0):6.1f}"
+              f"   {'yes' if L.get('sustained_fits_60hz') else 'NO':>3}"
+              f"  {L.get('degradation_pct',0):+6.1f}%")
+    for L in levels:
+        if L.get("buckets") and len(levels) == 1:
+            print("\n      t(s)  frames    avg ms    min ms    max ms")
+            for b in L["buckets"]:
+                print(f"    {b['t_start_s']:6.1f} {b['frames']:7d} {b['ms_avg']:9.2f}"
+                      f" {b['ms_min']:9.2f} {b['ms_max']:9.2f}")
+    th = sk.get("sustained_groups_at_60hz")
+    if isinstance(th, (int, float)):
+        print(f"\n  SUSTAINED 60Hz threshold : {th:.0f} workgroups")
+        print("  This is the planning number. frame_loop's threshold is boost clock.")
+    elif "sustained_groups_at_60hz" in sk:
+        print(f"\n  {sk.get('threshold_note','')}")
+    for L in levels:
+        if L.get("reading"):
+            print(f"  {L.get('workgroups',0):7d}: {L['reading']}")
 
 mm = d.get("memory")
 print("\n--- MEMORY (Stage 7) ---")

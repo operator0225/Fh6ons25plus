@@ -1399,15 +1399,20 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
  * (blocked by Winlator's proot) and no external sampler (1 Hz cannot see a
  * four-second burst).
  */
-static void test_soak(Ctx *c, VkDevice dev, uint32_t gfx_family,
-                      uint32_t seconds, uint32_t groups)
+/*
+ * Runs each load back to back without a cool-down. That is deliberate: a game
+ * keeps the device hot, so the interesting figure is what each load sustains
+ * on an already-warm phone, not what it manages from cold.
+ */
+static void soak_one(Ctx *c, VkDevice dev, uint32_t gfx_family,
+                     uint32_t seconds, uint32_t groups,
+                     double *out_sustained_ms)
 {
-    jobj("soak");
     ju32("seconds_requested", seconds);
     ju32("workgroups", groups);
 
     DevFn f;
-    if (!load_devfn(dev, &f)) { jstr("error", "device entry points unavailable"); jobj_end(); return; }
+    if (!load_devfn(dev, &f)) { jstr("error", "device entry points unavailable"); return; }
 
     PFN_vkGetPhysicalDeviceMemoryProperties pGMP =
         (PFN_vkGetPhysicalDeviceMemoryProperties)(uintptr_t)
@@ -1419,7 +1424,7 @@ static void test_soak(Ctx *c, VkDevice dev, uint32_t gfx_family,
     const VkDeviceSize work_bytes = (VkDeviceSize)groups * 64 * sizeof(float);
     Workload w;
     if (!workload_create(&f, dev, &mp, 64, work_bytes, 1u * 1024 * 1024, &w)) {
-        jstr("error", "could not build the workload"); jobj_end(); return;
+        jstr("error", "could not build the workload"); return;
     }
 
     VkQueue q = VK_NULL_HANDLE;
@@ -1507,20 +1512,35 @@ static void test_soak(Ctx *c, VkDevice dev, uint32_t gfx_family,
     }
     jarr_end();
 
-    /* First and last populated buckets: the degradation, if any. */
     int first = -1, last = -1;
     for (int i = 0; i < SOAK_BUCKETS; i++) if (b[i].n) { if (first < 0) first = i; last = i; }
+
+    /* Sustained cost is the mean over the LAST THIRD of the run. The first
+     * seconds are boost clock and say nothing about what a game will see;
+     * a single trailing bucket is too few frames to be stable. */
+    double sustained = 0;
+    if (first >= 0) {
+        int from = first + (last - first) * 2 / 3;
+        double sum = 0; uint32_t n = 0;
+        for (int i = from; i <= last; i++) { sum += b[i].sum; n += b[i].n; }
+        if (n) sustained = sum / n;
+    }
+    jf("sustained_ms", sustained);
+    if (out_sustained_ms) *out_sustained_ms = sustained;
+
     if (first >= 0 && last > first) {
         double a = b[first].sum / b[first].n;
-        double z = b[last].sum / b[last].n;
         jf("first_bucket_ms", a);
-        jf("last_bucket_ms", z);
-        jf("degradation_x", a > 0 ? z / a : 0.0);
-        jf("degradation_pct", a > 0 ? (z - a) / a * 100.0 : 0.0);
+        jf("last_bucket_ms", b[last].sum / b[last].n);
+        jf("peak_ms", a);
+        jf("degradation_x", a > 0 ? sustained / a : 0.0);
+        jf("degradation_pct", a > 0 ? (sustained - a) / a * 100.0 : 0.0);
+        jf("sustained_fps", sustained > 0 ? 1000.0 / sustained : 0.0);
+        jbool("sustained_fits_60hz", sustained > 0 && sustained <= 1000.0 / 60.0);
         jstr("reading",
-             z > a * 1.15 ? "frame time degrades under sustained load -- thermal or DVFS"
-             : z < a * 0.95 ? "frame time IMPROVES under load -- clocks ramping up, not throttling"
-             : "frame time holds steady across the soak");
+             sustained > a * 1.15 ? "degrades under sustained load -- thermal or DVFS"
+             : sustained < a * 0.95 ? "IMPROVES under load -- clocks ramping up, not throttling"
+             : "holds steady across the soak");
     } else {
         jnull("degradation_x");
     }
@@ -1528,6 +1548,54 @@ static void test_soak(Ctx *c, VkDevice dev, uint32_t gfx_family,
     if (qp) f.DestroyQueryPool(dev, qp, NULL);
     f.DestroyCommandPool(dev, pool, NULL);
     workload_destroy(&f, dev, &w);
+}
+
+/*
+ * The planning number this project actually needs: the load the GPU can hold
+ * inside a 60 Hz budget *after* it has throttled, rather than during the
+ * first fifteen seconds of boost.
+ */
+static void test_soak_ladder(Ctx *c, VkDevice dev, uint32_t gfx_family,
+                             uint32_t seconds, const uint32_t *loads, int nloads)
+{
+    jobj("soak");
+    ju32("seconds_per_level", seconds);
+    jstr("__note",
+         "levels run back to back with no cool-down, because a game keeps the "
+         "device hot. sustained_ms is the mean over each level's last third.");
+
+    double prev_g = 0, prev_ms = 0, threshold = 0;
+
+    jarr("levels");
+    for (int i = 0; i < nloads; i++) {
+        double sustained = 0;
+        jobj(NULL);
+        soak_one(c, dev, gfx_family, seconds, loads[i], &sustained);
+        jobj_end();
+        fflush(stdout);
+
+        const double budget = 1000.0 / 60.0;
+        if (sustained > 0) {
+            if (sustained > budget && prev_ms > 0 && prev_ms <= budget) {
+                threshold = prev_g + (loads[i] - prev_g) *
+                            (budget - prev_ms) / (sustained - prev_ms);
+            }
+            prev_g = loads[i];
+            prev_ms = sustained;
+        }
+    }
+    jarr_end();
+
+    if (threshold > 0) {
+        jf("sustained_groups_at_60hz", threshold);
+        jstr("threshold_note",
+             "workgroups the GPU holds inside 16.67 ms AFTER throttling. This "
+             "is the planning number; frame_loop's threshold is boost clock.");
+    } else {
+        jnull("sustained_groups_at_60hz");
+        jstr("threshold_note",
+             "60 Hz budget not bracketed by these levels -- widen --soak-loads");
+    }
     jobj_end();
 }
 
@@ -1552,8 +1620,8 @@ static void usage_text(void)
       "  --skip-gpu        do not run the queue-cost / frame-loop tests\n"
       "  --qc-iters N      queue-cost iterations (default 32)\n"
       "  --frames N        frames per load level (default 9)\n"
-      "  --soak N          hold one load for N seconds (default 60, 0 = off)\n"
-      "  --soak-groups N   workgroups for the soak (default 65536)\n"
+      "  --soak N          seconds per soak level (default 45, 0 = off)\n"
+      "  --soak-loads A,B,C  soak these loads in turn (default 16384,65536,131072)\n"
       "  --out FILE        write JSON here instead of stdout\n"
       "  -h, --help        this text\n",
       stderr);
@@ -1568,7 +1636,12 @@ int main(int argc, char **argv)
     uint32_t qc_iters = 32, qc_groups = 1024, qc_copy_mb = 8, frames = 9;
     /* 60 s at a load near the 60 Hz threshold: long enough to reach steady
      * state, which four seconds is not. */
-    uint32_t soak_s = 60, soak_groups = 65536;
+    /* 45 s is past the ~37 s at which throttling settled when measured. Three
+     * levels bracket the 60 Hz budget at sustained clock without running for
+     * an unreasonable time. */
+    uint32_t soak_s = 45;
+    uint32_t soak_loads[8] = { 16384, 65536, 131072 };
+    int n_soak_loads = 3;
     int skip_gpu = 0;
     int skip_memory = 0;
 
@@ -1585,7 +1658,12 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--qc-iters") && i + 1 < argc) qc_iters = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) frames = (uint32_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--soak") && i + 1 < argc) soak_s = (uint32_t)strtoul(argv[++i], NULL, 10);
-        else if (!strcmp(argv[i], "--soak-groups") && i + 1 < argc) soak_groups = (uint32_t)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--soak-loads") && i + 1 < argc) {
+            n_soak_loads = 0;
+            for (char *tok = strtok(argv[++i], ","); tok && n_soak_loads < 8;
+                 tok = strtok(NULL, ","))
+                soak_loads[n_soak_loads++] = (uint32_t)strtoul(tok, NULL, 10);
+        }
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage_text(); return 0; }
         else { fprintf(stderr, "vkbench: unknown argument '%s'\n", argv[i]); usage_text(); return 2; }
     }
@@ -1732,7 +1810,8 @@ int main(int argc, char **argv)
     if (!skip_gpu) {
         test_queue_cost(&c, dev, (uint32_t)gfx, qc_iters, qc_groups, qc_copy_mb);
         test_frame_loop(&c, dev, (uint32_t)gfx, frames);
-        if (soak_s) test_soak(&c, dev, (uint32_t)gfx, soak_s, soak_groups);
+        if (soak_s && n_soak_loads)
+            test_soak_ladder(&c, dev, (uint32_t)gfx, soak_s, soak_loads, n_soak_loads);
         else jnull("soak");
     } else {
         jnull("queue_cost");
