@@ -1530,9 +1530,19 @@ static void soak_one(Ctx *c, VkDevice dev, uint32_t gfx_family,
 
     if (first >= 0 && last > first) {
         double a = b[first].sum / b[first].n;
+        /*
+         * Peak is the FASTEST bucket, not the first. The first bucket carries
+         * allocation and first-submit outliers -- measured maxima of 32 ms and
+         * 65 ms against steady-state means of 7 ms and 17 ms -- which inflate
+         * it enough to make a degrading level report as improving.
+         */
+        double peak = 1e18;
+        for (int i = first; i <= last; i++)
+            if (b[i].n) { double m = b[i].sum / b[i].n; if (m < peak) peak = m; }
         jf("first_bucket_ms", a);
         jf("last_bucket_ms", b[last].sum / b[last].n);
-        jf("peak_ms", a);
+        jf("peak_ms", peak);
+        a = peak;
         jf("degradation_x", a > 0 ? sustained / a : 0.0);
         jf("degradation_pct", a > 0 ? (sustained - a) / a * 100.0 : 0.0);
         jf("sustained_fps", sustained > 0 ? 1000.0 / sustained : 0.0);

@@ -177,8 +177,14 @@ throttling settled when measured. Across levels it interpolates
 **`sustained_groups_at_60hz`**: the load the GPU holds inside 16.67 ms *after*
 throttling.
 
-**That is the planning number.** `frame_loop`'s threshold is boost clock and
-runs for a fraction of a second; on this device the two differ by roughly 2x.
+**That is the planning number.** `frame_loop` runs eight frames per level,
+which is too short for DVFS to ramp *up* — measured against the soak at the
+same load it came out 45% slower than even the throttled steady state. Short
+tests here are pessimistic, not optimistic.
+
+`peak_ms` is the fastest bucket, not the first: the first carries allocation
+and first-submit outliers (32 ms and 65 ms maxima against 7 ms and 17 ms
+steady means) which were enough to make degrading levels report as improving.
 
 Three outcomes are distinguished: degrading (thermal or DVFS), steady, or
 *improving* — clocks ramping up rather than throttling down, which both the
