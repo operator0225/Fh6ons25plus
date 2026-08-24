@@ -36,10 +36,10 @@ device and translation stack rather than on the storefront.
 | 1 — Environment survey | **done** — S25+ / SM8750 / Adreno830v2 confirmed |
 | 2 — Adreno 830 capabilities | **measured** — [vendor driver](docs/02-adreno830-capabilities.md) and [Turnip in-container](docs/03-turnip-capabilities.md) |
 | 3 — Star Bionic layer | not started — target list now set by Stage 2 |
-| 4 — VKD3D-Proton / DX12 path | not started |
-| 5 — Shader & pipeline cache | not started |
+| 4 — VKD3D-Proton / DX12 path | **harness built** — [vkbench](docs/04-measurement-harness.md) queue topology test; awaiting device run |
+| 5 — Shader & pipeline cache | **harness built** — cold/warm/seeded pipeline compile benchmark; awaiting device run |
 | 6 — CPU affinity | not started |
-| 7 — Android overhead | not started |
+| 7 — Android overhead | **harness built** — memory budget pressure test; awaiting device run |
 | 8–9 — Resolution / dynamic res | not started |
 | 10 — Profiler | **system-side done** — [docs](docs/10-profiler.md); FPS needs in-container capture |
 | 11 — Benchmark harness | not started |
@@ -126,6 +126,22 @@ it could not read. See [docs/10-profiler.md](docs/10-profiler.md).
 
 FPS, frametime and shader/pipeline timing are **not** included: they exist
 only inside the rendering process. The doc explains the routes to them.
+
+### `tools/vkbench/` — Stage 4/5/7 measurement harness
+
+Runs **inside the Winlator container**, so it measures the driver
+VKD3D-Proton actually uses. Three tests, each with a hypothesis attached:
+queue topology (can D3D12's three queues map to distinct Vulkan queues?),
+pipeline compile cost (cold vs warm vs **seeded from a serialised blob** —
+the case a shipped cache actually hits), and memory budget under allocation
+pressure (does `heapUsage` really move, or is the budget decorative?).
+
+```sh
+cp tools/vkbench/prebuilt/vkbench.exe ~/storage/downloads/   # then run in Winlator
+./tools/bench-report.py /sdcard/Download/vkbench-result.json
+```
+
+See [docs/04-measurement-harness.md](docs/04-measurement-harness.md).
 
 ### `tools/vkprobe/` — Vulkan capability probe
 
