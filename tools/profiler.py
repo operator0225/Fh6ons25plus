@@ -120,6 +120,74 @@ class CpuLoad:
         return pct
 
 
+class CpuIdleLoad:
+    """
+    Fallback for when /proc/stat is unreadable, which recent Android does to
+    apps. cpuidle exposes cumulative time spent in each idle state per core,
+    so busy = elapsed wall time - elapsed idle time.
+
+    An offline core is reported as None, not as 100% busy: its idle counter
+    stops advancing while the wall clock does not, and big.LITTLE Android
+    hotplugs cores constantly.
+    """
+
+    def __init__(self, cpudirs):
+        self.dirs = cpudirs
+        self.prev = {}
+        self.available = any(self._idle_us(c) is not None for c in cpudirs)
+
+    @staticmethod
+    def _online(cdir):
+        v = read_int(os.path.join(cdir, "online"))
+        # cpu0 usually cannot be offlined and exposes no `online` file.
+        return True if v is None else v == 1
+
+    @staticmethod
+    def _idle_us(cdir):
+        base = os.path.join(cdir, "cpuidle")
+        try:
+            states = [d for d in os.listdir(base) if d.startswith("state")]
+        except OSError:
+            return None
+        total = None
+        for st in states:
+            v = read_int(os.path.join(base, st, "time"))
+            if v is not None:
+                total = (total or 0) + v
+        return total
+
+    def sample(self):
+        now = time.monotonic()
+        out = {}
+        for i, c in enumerate(self.dirs):
+            key = f"cpu{i}"
+            idle = self._idle_us(c) if self._online(c) else None
+            prev = self.prev.get(key)
+            if idle is None or prev is None:
+                out[key] = None
+            else:
+                d_idle = (idle - prev[0]) / 1e6      # us -> s
+                d_wall = now - prev[1]
+                out[key] = (
+                    round(min(100.0, max(0.0, (d_wall - d_idle) / d_wall * 100.0)), 1)
+                    if d_wall > 0 else None
+                )
+            self.prev[key] = (idle, now) if idle is not None else None
+        vals = [v for v in out.values() if v is not None]
+        out["cpu"] = round(sum(vals) / len(vals), 1) if vals else None
+        return out
+
+
+def loadavg():
+    t = read_text("/proc/loadavg")
+    if not t:
+        return None
+    try:
+        return float(t.split()[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def cpu_dirs():
     return glob_dirs("/sys/devices/system/cpu", r"cpu\d+")
 
@@ -199,30 +267,42 @@ class Gpu:
 # Thermals
 # ----------------------------------------------------------------------
 
-# Samsung exposes dozens of zones; these are the ones that bear on sustained
-# GPU workloads. Matched as substrings against the zone's own `type`.
-THERMAL_PATTERNS = ("gpu", "cpu", "battery", "skin", "ap_therm", "soc", "qpnp")
+# Samsung exposes dozens of zones, and taking simply the first N yields ten
+# CPU cores and no battery or skin sensor at all. Group by what the zone is
+# measuring and take a spread, so sustained-load behaviour is actually visible.
+THERMAL_CATEGORIES = (
+    ("gpu",     ("gpu",)),
+    ("battery", ("batt",)),
+    ("skin",    ("skin", "usb", "case", "quiet")),
+    ("soc",     ("soc", "ap_therm", "qpnp", "pm8", "mdm")),
+    ("cpu",     ("cpu",)),
+)
+PER_CATEGORY = 3
 
 
-def thermal_zones(limit=10):
-    zones = []
+def thermal_zones(limit=12):
+    buckets = {name: [] for name, _ in THERMAL_CATEGORIES}
+    seen = set()
     for z in glob_dirs("/sys/class/thermal", r"thermal_zone\d+"):
         t = read_text(os.path.join(z, "type"))
-        if not t:
+        if not t or t in seen:
+            continue
+        temp_path = os.path.join(z, "temp")
+        if read_int(temp_path) is None:
             continue
         low = t.lower()
-        if any(p in low for p in THERMAL_PATTERNS):
-            if read_int(os.path.join(z, "temp")) is not None:
-                zones.append((t, os.path.join(z, "temp")))
-    # Deduplicate identical type names, keeping the first.
-    seen, out = set(), []
-    for name, path in zones:
-        if name in seen:
-            continue
-        seen.add(name)
-        out.append((name, path))
-        if len(out) >= limit:
-            break
+        for cat, pats in THERMAL_CATEGORIES:
+            if any(p in low for p in pats):
+                buckets[cat].append((t, temp_path))
+                seen.add(t)
+                break
+
+    out = []
+    # Round-robin so no single category can crowd the others out.
+    for rank in range(PER_CATEGORY):
+        for cat, _ in THERMAL_CATEGORIES:
+            if rank < len(buckets[cat]) and len(out) < limit:
+                out.append(buckets[cat][rank])
     return out
 
 
@@ -259,8 +339,14 @@ def meminfo():
 class Profiler:
     def __init__(self, args):
         self.args = args
-        self.cpu = CpuLoad()
         self.cpus = cpu_dirs()
+        self.cpu = CpuLoad()
+        self.cpu_idle = CpuIdleLoad(self.cpus)
+        # /proc/stat is preferred when readable; recent Android blocks it.
+        self.cpu_source = (
+            "/proc/stat" if read_text("/proc/stat") is not None
+            else ("cpuidle" if self.cpu_idle.available else None)
+        )
         self.gpu = Gpu()
         self.zones = thermal_zones()
         self.samples = []
@@ -270,7 +356,8 @@ class Profiler:
     def availability(self):
         mi = meminfo()
         return {
-            "cpu_load": read_text("/proc/stat") is not None,
+            "cpu_load": self.cpu_source is not None,
+            "cpu_load_source": self.cpu_source,
             "cpu_count": len(self.cpus),
             "cpu_freq": any(cpu_mhz(c) is not None for c in self.cpus),
             "kgsl_path": self.gpu.base,
@@ -293,7 +380,7 @@ class Profiler:
         cols += [f"cpu{i}_mhz" for i in range(len(self.cpus))]
         cols += ["gpu_busy_pct", "gpu_mhz", "gpu_temp_c", "gpu_throttling"]
         cols += [self._zone_col(n) for n, _ in self.zones]
-        cols += ["mem_avail_mb", "mem_used_mb", "swap_used_mb"]
+        cols += ["loadavg_1m", "mem_avail_mb", "mem_used_mb", "swap_used_mb"]
         return cols
 
     @staticmethod
@@ -301,7 +388,8 @@ class Profiler:
         return "temp_" + re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower() + "_c"
 
     def sample(self, t0):
-        pct = self.cpu.sample()
+        pct = (self.cpu.sample() if self.cpu_source == "/proc/stat"
+               else self.cpu_idle.sample() if self.cpu_source else {})
         mi = meminfo()
 
         total_kb = mi.get("MemTotal")
@@ -327,6 +415,7 @@ class Profiler:
         for name, path in self.zones:
             row[self._zone_col(name)] = temp_c(path)
 
+        row["loadavg_1m"] = loadavg()
         row["mem_avail_mb"] = round(avail_kb / 1024) if avail_kb else None
         row["mem_used_mb"] = (
             round((total_kb - avail_kb) / 1024) if total_kb and avail_kb else None
@@ -401,7 +490,7 @@ class Profiler:
         print("star-bionic profiler -- source availability")
         print("=" * 62)
         print(f"  cpu cores            {a['cpu_count']}")
-        print(f"  cpu load             {'yes' if a['cpu_load'] else 'NO'}")
+        print(f"  cpu load             {a['cpu_load_source'] or 'NO SOURCE'}")
         print(f"  cpu frequency        {'yes' if a['cpu_freq'] else 'NO'}")
         print(f"  kgsl                 {a['kgsl_path'] or 'NOT FOUND'}")
         for k, label in (
@@ -460,8 +549,8 @@ class Profiler:
     @staticmethod
     def _print_summary(summary):
         interesting = [
-            "cpu_total_pct", "gpu_busy_pct", "gpu_mhz", "gpu_temp_c",
-            "mem_used_mb",
+            "cpu_total_pct", "loadavg_1m", "gpu_busy_pct", "gpu_mhz",
+            "gpu_temp_c", "mem_used_mb",
         ]
         rows = [(k, summary.get(k)) for k in interesting if summary.get(k)]
         rows += [
