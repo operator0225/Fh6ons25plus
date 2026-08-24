@@ -41,7 +41,7 @@ device and translation stack rather than on the storefront.
 | 6 — CPU affinity | not started |
 | 7 — Android overhead | not started |
 | 8–9 — Resolution / dynamic res | not started |
-| 10 — Profiler | not started |
+| 10 — Profiler | **system-side done** — [docs](docs/10-profiler.md); FPS needs in-container capture |
 | 11 — Benchmark harness | not started |
 | 12 — Optimisation priority | n/a |
 | 13 — Feature flags | [contract defined](docs/13-feature-flags.md) |
@@ -104,6 +104,22 @@ Renders a capture as a compact table: driver identity, API level, the
 DX12/VKD3D-critical feature set, texture and depth formats, subgroup, sparse,
 memory heaps and limits. Needs only grep/awk. A field the probe did not
 capture prints `?`, never a guessed `no`.
+
+### `tools/profiler.py` — Stage 10 sampler
+
+```sh
+termux-wake-lock                      # or Android suspends backgrounded Termux
+./tools/profiler.py --duration 300 --out runs/baseline --label "idle"
+```
+
+Samples CPU load and frequency per core, GPU load/frequency/temperature/
+throttling from KGSL, thermal zones, RAM and swap. Writes CSV plus a JSON
+summary with min/mean/p50/p95/max. Prints which sources are actually readable
+before sampling starts, and writes an empty cell — never a 0 — for anything
+it could not read. See [docs/10-profiler.md](docs/10-profiler.md).
+
+FPS, frametime and shader/pipeline timing are **not** included: they exist
+only inside the rendering process. The doc explains the routes to them.
 
 ### `tools/vkprobe/` — Vulkan capability probe
 
