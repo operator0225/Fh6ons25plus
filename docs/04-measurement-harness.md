@@ -150,9 +150,33 @@ specific capture.
 
 **Drive letters inside Winlator.** `D:` is commonly the Downloads folder, so
 an exe at `D:\tools\vkbench.exe` writes its report to `D:\tools\` — which
-is `/sdcard/Download/tools/` from Termux. Separately, `Z:` is the Unix root,
-which is how the benchmark reads KGSL sysfs; that mapping is Wine's and does
-not depend on how `D:` is configured.
+is `/sdcard/Download/tools/` from Termux.
+
+## GPU clock and temperature: not readable from inside Winlator
+
+The benchmark tries to read KGSL sysfs through `Z:\sys\class\kgsl\...`,
+on the reasoning that Wine maps the Unix root at `Z:`. Verified working under
+plain Wine against a synthetic tree — **and it fails on the device.**
+`kgsl_sysfs_readable: false`, every field null.
+
+The reason is that Winlator runs Wine inside a **proot container with its own
+root filesystem**. `Z:` is that container's root, not Android's, so
+`/sys/class/kgsl` simply is not there to open. The Wine test passed because
+plain Wine really does map the host root; Winlator's does not.
+
+The probe is kept because it costs nothing, reports `false` honestly rather
+than fabricating zeros, and may work in other runtimes or configurations. But
+on Winlator, **thermal and clock data has to come from the profiler running
+in Termux alongside the benchmark**:
+
+```sh
+# Termux -- start first, then switch to Winlator and run vkbench
+./tools/star-bionic-run monitor --duration 180 --label vkbench
+```
+
+The readings are then from a different process at 1 Hz rather than inline
+with each frame, which is weaker correlation — but it is real data, and the
+inline version is not available here.
 
 Options, if launched with a shell: `--pipelines N`, `--chunk-mb N`,
 `--cap-mb N`, `--skip-memory`, `--out FILE`, `--lib PATH`, `--device N`.
