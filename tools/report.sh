@@ -11,11 +11,36 @@
 set -uo pipefail
 
 F="${1:-}"
-if [[ -z "$F" || ! -r "$F" ]]; then
+
+# A named-but-missing file and no-file-at-all are different mistakes and
+# deserve different messages -- "usage:" for a path typo sends you looking in
+# the wrong place.
+if [[ -n "$F" && ! -r "$F" ]]; then
+  {
+    echo "report.sh: cannot read '$F'"
+    echo
+    echo "If this is a Turnip capture, it only exists after you run"
+    echo "vkprobe.exe INSIDE the Winlator container:"
+    echo "    vkprobe.exe --out Z:\\sdcard\\Download\\caps-turnip.json"
+    echo
+    echo "Captures found here:"
+    ls -1 collect-*/caps-*.json /sdcard/Download/caps-*.json 2>/dev/null \
+      | sed 's/^/    /' | head -10 || true
+    ls collect-*/caps-*.json /sdcard/Download/caps-*.json >/dev/null 2>&1 \
+      || echo "    (none)"
+  } >&2
+  exit 2
+fi
+
+if [[ -z "$F" ]]; then
   # Convenience: pick the newest android capture if none named.
   F=$(ls -t collect-*/caps-android.json 2>/dev/null | head -1)
 fi
-[[ -n "$F" && -r "$F" ]] || { echo "usage: report.sh <caps.json>" >&2; exit 2; }
+
+if [[ -z "$F" || ! -r "$F" ]]; then
+  echo "usage: report.sh <caps.json>   (run from the repo root)" >&2
+  exit 2
+fi
 
 # first scalar value for a key
 g()  { grep -o "\"$1\": [a-z0-9]*" "$F" | head -1 | awk '{print $2}'; }
