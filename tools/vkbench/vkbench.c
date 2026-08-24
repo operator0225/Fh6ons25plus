@@ -1140,8 +1140,15 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
     memset(&mp, 0, sizeof mp);
     pGMP(c->pd, &mp);
 
+    /* One thread per float, so the storage buffer has to cover the largest
+     * dispatch we will issue -- otherwise robustBufferAccess silently drops
+     * the out-of-range half and the heavy levels measure less work than they
+     * claim to. */
+    const uint32_t MAX_GROUPS = 262144;
+    const VkDeviceSize work_bytes = (VkDeviceSize)MAX_GROUPS * 64 * sizeof(float);
+
     Workload w;
-    if (!workload_create(&f, dev, &mp, 64, 16u * 1024 * 1024, 1u * 1024 * 1024, &w)) {
+    if (!workload_create(&f, dev, &mp, 64, work_bytes, 1u * 1024 * 1024, &w)) {
         jstr("error", "could not build the workload"); jobj_end(); return;
     }
 
@@ -1168,10 +1175,18 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
     ju32("frames_per_level", frames);
     jf("timestamp_period_ns", c->props.limits.timestampPeriod);
 
-    static const uint32_t levels[] = { 64, 256, 1024, 4096, 16384 };
+    /*
+     * Doubling sweep rather than a fixed ladder. A ladder calibrated on one
+     * device tells you nothing on a faster one: the first Adreno 830 run
+     * topped out at 32% of the 60 Hz budget, so every level "fit" and the
+     * threshold was never found. This climbs until the budget is actually
+     * exceeded, so the crossing point is measured on whatever hardware runs it.
+     */
+    const double BUDGET_60HZ_MS = 1000.0 / 60.0;
+    double prev_groups = 0, prev_ms = 0, threshold = 0;
+
     jarr("levels");
-    for (size_t li = 0; li < sizeof levels / sizeof *levels; li++) {
-        uint32_t groups = levels[li];
+    for (uint32_t groups = 64; groups <= MAX_GROUPS; groups *= 4) {
         double gpu_sum = 0, wall_sum = 0;
         double gpu_min = 1e18, gpu_max = 0;
         uint32_t counted = 0;
@@ -1230,8 +1245,35 @@ static void test_frame_loop(Ctx *c, VkDevice dev, uint32_t gfx_family,
         }
         jobj_end();
         fflush(stdout);
+
+        if (counted && gpu_sum > 0) {
+            double avg = gpu_sum / counted;
+            if (avg > BUDGET_60HZ_MS) {
+                /* Log-linear interpolation between the last two points: work
+                 * scales roughly linearly with group count here. */
+                if (prev_ms > 0 && avg > prev_ms)
+                    threshold = prev_groups +
+                        (groups - prev_groups) * (BUDGET_60HZ_MS - prev_ms) / (avg - prev_ms);
+                else
+                    threshold = groups;
+                break;
+            }
+            prev_groups = groups;
+            prev_ms = avg;
+        }
     }
     jarr_end();
+
+    if (threshold > 0) {
+        jf("groups_at_60hz_budget", threshold);
+        jstr("threshold_note",
+             "interpolated workgroup count where GPU time reaches 16.67 ms");
+    } else {
+        jnull("groups_at_60hz_budget");
+        jstr("threshold_note",
+             "never exceeded the 60 Hz budget within the sweep cap -- the GPU "
+             "is faster than this synthetic workload can load it");
+    }
 
     if (qp) f.DestroyQueryPool(dev, qp, NULL);
     f.DestroyCommandPool(dev, pool, NULL);
