@@ -22,9 +22,10 @@ Just launch it. **No arguments needed.**
 
 On Windows it always writes a file, because Winlator launches an exe by tap
 — no shell, no arguments, no redirection, and a console window you cannot
-read on a phone. With no `--out` it writes `vkprobe-caps.json` next to
-wherever it was launched from, so putting the exe in `Download` puts the
-JSON in `Download`.
+read on a phone. With no `--out` it writes `vkprobe-caps.json` **beside the
+exe itself**, not in the working directory: Winlator picks the cwd, and it is
+not something you chose or can see. Put the exe in `Download`, get the JSON
+in `Download`.
 
 To choose the path explicitly:
 

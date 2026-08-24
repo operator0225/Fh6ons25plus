@@ -53,6 +53,37 @@
 
 #define PROBE_VERSION "0.1.0"
 
+#ifdef _WIN32
+/*
+ * Default the report next to the EXE, not to the working directory. Winlator
+ * launches by tap, and the cwd it hands the process is not something the user
+ * chose or can see -- so "the file is beside the exe you tapped" is the only
+ * answer that stays true wherever they put it.
+ */
+static char g_default_out[MAX_PATH];
+
+static const char *default_out_path(void)
+{
+    static const char *name = "vkprobe-caps.json";
+    DWORD n = GetModuleFileNameA(NULL, g_default_out, (DWORD)sizeof g_default_out);
+    if (n == 0 || n >= sizeof g_default_out)
+        return name;
+
+    DWORD cut = 0;
+    for (DWORD i = n; i > 0; i--) {
+        if (g_default_out[i - 1] == '\\' || g_default_out[i - 1] == '/') {
+            cut = i;
+            break;
+        }
+    }
+    if (cut == 0 || cut + strlen(name) + 1 > sizeof g_default_out)
+        return name;           /* no separator, or no room -- stay relative */
+
+    strcpy(g_default_out + cut, name);
+    return g_default_out;
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Minimal JSON writer                                                 */
 /* ------------------------------------------------------------------ */
@@ -1109,7 +1140,7 @@ int main(int argc, char **argv)
      * that is unreadable on a phone and gone when it closes. So on Windows,
      * always write a file -- next to wherever the exe was launched from. */
     if (!outpath)
-        outpath = "vkprobe-caps.json";
+        outpath = default_out_path();
 #endif
 
     /* Every emitter writes to stdout, so redirecting it here covers all of
