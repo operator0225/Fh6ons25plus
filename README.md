@@ -79,6 +79,11 @@ it is the plausible next bottleneck.
 - **[docs/06-07-thermal-and-sustained.md](docs/06-07-thermal-and-sustained.md)** —
   **the device has three clock regimes and sustained is half of boost.** What
   that constrains, and an honest read on whether 1080p/High/60 is reachable.
+- **[docs/runtime-selection.md](docs/runtime-selection.md)** — which Winlator
+  fork, and what to change in it. **Stay on official Winlator**; the one
+  targeted upgrade is 11.0 → 11.2 Beta for Box64 v0.4.4. Box64 dynarec
+  variables are deliberately *not* prescribed, because the CPU side has not
+  been measured.
 - **[measurements/RESULTS-2026-08-24.md](measurements/RESULTS-2026-08-24.md)** —
   the raw measurement record, corrections included.
 - **[docs/13-feature-flags.md](docs/13-feature-flags.md)** — flag contract.
@@ -158,6 +163,8 @@ See [docs/04-measurement-harness.md](docs/04-measurement-harness.md).
 ```sh
 ./tools/star-bionic-run setup    # derive cache key, make dirs, print env block
 ./tools/star-bionic-run check    # is the cache still valid for this driver?
+./tools/star-bionic-run runtime  # which Winlator fork is actually installed?
+./tools/star-bionic-run thermal  # cool enough to benchmark? (--wait to block)
 ./tools/star-bionic-run monitor  # profile a session, holding a wakelock
 ./tools/star-bionic-run flags    # Stage 13 flag status
 ```
@@ -167,6 +174,13 @@ app, and nothing in Termux can set that process's environment — so this
 derives the cache key from the driver capture, creates the directories, and
 *emits* the environment block to paste into Winlator. A driver update changes
 the key, so a stale blob cannot be silently reused.
+
+`runtime` enumerates installed Winlator-family packages with their versions,
+so the fork under test is identified rather than assumed — see
+[docs/runtime-selection.md](docs/runtime-selection.md). Android sandboxing
+hides each app's private data, so it reports the package and version and
+says plainly that the Wine/Box64/VKD3D versions inside a container are not
+readable from Termux.
 
 ### `tools/vkprobe/` — Vulkan capability probe
 

@@ -13,6 +13,8 @@ produce a launcher that silently does nothing.
                                                    print the env block
     ./tools/star-bionic-run check                  preflight: is the cache key
                                                    still valid for this driver?
+    ./tools/star-bionic-run runtime                which Winlator-family app
+                                                   is installed, and what version?
     ./tools/star-bionic-run thermal [--wait]       is the device cool enough
                                                    to produce comparable numbers?
     ./tools/star-bionic-run monitor [--duration N] profile a session
@@ -281,6 +283,79 @@ def cmd_thermal(args):
         return 1
 
 
+# Winlator-family packages, by lineage. Recommending a fork without knowing
+# which one is installed is guessing, and switching forks means rebuilding a
+# container that this project has already characterised in detail.
+KNOWN_RUNTIMES = [
+    ("com.winlator",                 "Winlator (official, brunodev85)"),
+    ("com.winlator.cmod",            "Winlator Cmod (coffincolors)"),
+    ("com.winlator.bionic",          "Winlator Cmod Bionic"),
+    ("com.winlator.frost",           "Winlator Frost"),
+    ("com.winlator.afeimod",         "Winlator Afeimod"),
+    ("com.micewine.emu",             "MiceWine"),
+    ("com.gamehub",                  "GameHub"),
+    ("app.gamenative",               "GameNative"),
+    ("com.winhub",                   "WinHub"),
+]
+
+
+def cmd_runtime(_args):
+    """Identify installed Winlator-family runtimes and their versions."""
+    try:
+        out = subprocess.run(["pm", "list", "packages"], capture_output=True,
+                             text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if not out:
+        print("pm unavailable -- cannot enumerate packages from here.")
+        return 1
+
+    installed = {l.split(":", 1)[1].strip() for l in out.splitlines() if ":" in l}
+    hits = []
+    for p in sorted(installed):
+        # Longest match wins: com.winlator.cmod is Cmod, not official Winlator
+        # with a suffix. Matching the family prefix first would label it twice.
+        best = None
+        for pkg, label in KNOWN_RUNTIMES:
+            if p == pkg or p.startswith(pkg + "."):
+                if best is None or len(pkg) > len(best[0]):
+                    best = (pkg, label)
+        if best is not None:
+            suffix = "" if p == best[0] else "  (variant of this family)"
+            hits.append((p, best[1] + suffix))
+        elif any(k in p for k in ("winlator", "gamehub", "gamenative",
+                                  "winhub", "micewine")):
+            # Looks related but is not in the table -- say so rather than guess.
+            hits.append((p, "unrecognised -- please report"))
+
+    if not hits:
+        print("no Winlator-family runtime found.")
+        return 1
+
+    for pkg, label in hits:
+        ver = code = "?"
+        try:
+            d = subprocess.run(["dumpsys", "package", pkg], capture_output=True,
+                               text=True, timeout=20).stdout
+            for line in d.splitlines():
+                line = line.strip()
+                if line.startswith("versionName="):
+                    ver = line.split("=", 1)[1]
+                elif line.startswith("versionCode="):
+                    code = line.split("=", 1)[1].split()[0]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        print(f"  {pkg}")
+        print(f"    {label}")
+        print(f"    versionName={ver}  versionCode={code}")
+
+    print()
+    print("Note: Android sandboxing hides each app's private data, so the Wine,")
+    print("Box64 and VKD3D versions inside a container cannot be read from here.")
+    print("Those come from the container's own UI, or from a vkprobe capture.")
+    return 0
+
+
 def cmd_flags(_args):
     print(f"{'flag':30} {'default':>8}  {'stage':>5}  status")
     print("-" * 62)
@@ -312,6 +387,8 @@ def main():
     m.add_argument("--out")
     m.add_argument("--label", default="session")
     m.set_defaults(fn=cmd_monitor)
+
+    sub.add_parser("runtime", help="which Winlator-family app is installed?").set_defaults(fn=cmd_runtime)
 
     t = sub.add_parser("thermal", help="is the device cool enough to benchmark?")
     t.add_argument("--wait", action="store_true", help="block until it cools")

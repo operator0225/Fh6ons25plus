@@ -3,6 +3,8 @@ tools/vkprobe/build/
 *.o
 *.so
 /vkprobe
+__pycache__/
+*.pyc
 
 # capture output -- device data, not source
 diag-*/
