@@ -80,6 +80,34 @@ Each of these is a separate unknown, and they compound:
 This is not a "hard but tractable" list. Item 1 alone is an open-ended
 reverse-engineering effort by a two-week-old project.
 
+### Re-checked 2026-08-25 against Xodus's own README
+
+Status **unchanged**: still cannot launch a game. Its README says *"The
+project can now login, download packages and obtain licenses for games"*, and
+the FAQ that *"there is still a lot of work to support it from Wine standpoint
+to provide necessary XBOX Services to games."* The stated timeline is
+literally **`soontm`**.
+
+Two refinements, both in the pessimistic direction:
+
+- **Decryption is less finished than reported.** Press coverage says Xodus
+  "cracked" MSIXVC decryption; the repo tracks on-demand `.exe` decryption as
+  an **open issue (#50)**. Take the repo over the headline.
+- **MSIXVC2 is an open issue (#53)**, not work in progress — against an
+  October 2026 GA. The expiry risk in item 3 above is real and unmitigated.
+
+One thing that is *not* a new problem: FH6 is a 2026 GDK/MSIXVC title, so it
+is in scope in principle. The out-of-scope list is older UWP titles — Gears of
+War 4 is named, and early Forza Horizon releases fall in that category. **FH6
+itself does not.**
+
+**A gap worth naming explicitly:** Xodus solving this on Linux would not
+automatically solve it here. It ships **its own Wine and Proton forks**, built
+for x86_64 Linux and macOS. Winlator would have to carry those Wine patches in
+its own ARM64 Android build, under Box64 or FEXCore. That is a second porting
+effort that nobody has started, downstream of a first one that is not
+finished.
+
 ---
 
 ## What this means for the project

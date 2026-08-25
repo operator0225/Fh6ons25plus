@@ -312,6 +312,57 @@ This also revises the earlier advice to leave VKD3D-Proton alone. That advice
 was written when no specific reason existed. One now does; it is still a
 one-variable change to be measured, not assumed.
 
+### "Use the newest of everything" — what the shipped configs actually do
+
+GameNative carries a community config service that stores a **per-GPU** known
+-good configuration, matched by `exact_gpu_match` → `gpu_family_match` →
+`fallback_match`. Its test fixtures contain configs for Adreno 830, 825, 740,
+735 and Mali parts. Across **all ten** of them:
+
+| component | fixtures use | catalogue also offers |
+|---|---|---|
+| Box64 | 0.3.6 / 0.3.7 | **0.4.4** |
+| FEXCore | 2507 / 2511 | **2607, 2608** |
+| VKD3D | 2.6 / 2.12 / 2.13 / 2.14.1 | **3.0b, 3.0.1-0** |
+| DXVK | async-1.10.3 / 2.4.1 / 2.6.1 | **2.7.1** |
+
+**Not one config uses the newest of anything.** And the whole matching system
+only makes sense if newest does not always win — if it did, there would be one
+config, not a database keyed by GPU.
+
+Two honest caveats: these are **test fixtures**, canned API responses under
+`src/test/`, not proven field captures; and they may simply predate the newer
+components. So this is evidence about how the system is *designed to be used*,
+not proof that 0.3.6 beats 0.4.4.
+
+The Adreno 830 fixture, for whatever it is worth:
+
+```
+Adreno (TM) 830 · FEXCore · bionic · 1280x720
+  box64=0.3.6  fex=2507  dxwrapper=dxvk(async-1.10.3)  vkd3dVersion=2.6
+  avg_fps = 39.8  over 292 s
+```
+
+Read it carefully before it means anything: that is **Dota 2**, which is not
+DX12 — it runs through **DXVK**, so the `vkd3dVersion` field is inert and the
+number says nothing about the DX12 path FH6 needs. It is **720p**, not 1080p.
+And 39.8 fps is not a promising figure even so.
+
+There is also a fixture spoofing `gpuName=NVIDIA GeForce GTX 480,
+videoMemorySize=2048` — telling the game it is on known-good desktop hardware.
+Worth remembering as a technique; it is a compatibility lever, not a
+performance one.
+
+**This project's own evidence points the same way.** Official Winlator
+*bundles* Turnip 26.1.0-devel with A8XX patches, while its installable
+catalogue tops out at **26.0.3** — so "install the newest from the list" would
+be a **downgrade** on the exact axis that makes an A830 work. Newest-by-number
+and best-here are not the same question.
+
+And the priority list still applies: one of those fixtures sets
+`TU_DEBUG=noconform`, which disables conformant behaviour for speed. Stage 12
+puts correctness above performance, so that is not a knob this project turns.
+
 ### Samsung power control is a real SDK, not the package-name hack
 
 `SamsungPerformanceDriver.kt` imports **`com.samsung.sdk.sperf`** — Samsung's
