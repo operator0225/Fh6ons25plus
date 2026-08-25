@@ -298,6 +298,21 @@ KNOWN_RUNTIMES = [
     ("com.winhub",                   "WinHub"),
 ]
 
+# Substrings that hint at a Winlator-family app but cannot identify one.
+# The Bionic/Ludashi line ships the same build under deliberately misleading
+# package names -- one impersonates the Ludashi benchmark app so that an OEM's
+# benchmark whitelist unlocks a higher performance mode. Those ids contain no
+# "winlator" substring, so without this they are invisible here. A match is
+# genuinely ambiguous: it may be the real app it is impersonating.
+AMBIGUOUS_HINTS = [
+    ("ludashi",  "Winlator-Ludashi (Bionic line) OR the real Ludashi "
+                 "benchmark app -- check the icon"),
+    ("redmagic", "possibly the Winlator-Ludashi RedMagic build OR RedMagic "
+                 "system software"),
+    ("nubia",    "possibly the Winlator-Ludashi RedMagic build OR nubia "
+                 "system software"),
+]
+
 
 def cmd_runtime(_args):
     """Identify installed Winlator-family runtimes and their versions."""
@@ -327,6 +342,11 @@ def cmd_runtime(_args):
                                   "winhub", "micewine")):
             # Looks related but is not in the table -- say so rather than guess.
             hits.append((p, "unrecognised -- please report"))
+        else:
+            for key, label in AMBIGUOUS_HINTS:
+                if key in p.lower():
+                    hits.append((p, "AMBIGUOUS: " + label))
+                    break
 
     if not hits:
         print("no Winlator-family runtime found.")

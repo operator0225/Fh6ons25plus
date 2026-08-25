@@ -80,10 +80,12 @@ it is the plausible next bottleneck.
   **the device has three clock regimes and sustained is half of boost.** What
   that constrains, and an honest read on whether 1080p/High/60 is reachable.
 - **[docs/runtime-selection.md](docs/runtime-selection.md)** — which Winlator
-  fork, and what to change in it. **Stay on official Winlator**; the one
-  targeted upgrade is 11.0 → 11.2 Beta for Box64 v0.4.4. Box64 dynarec
-  variables are deliberately *not* prescribed, because the CPU side has not
-  been measured.
+  fork, and what to change in it. **Stay on official Winlator** on the GPU
+  axis; the one targeted upgrade is 11.0 → 11.2 Beta for Box64 v0.4.4. The
+  open case against it is the Bionic/Ludashi line's **Arm64EC + FEXCore**,
+  where VKD3D runs as native ARM64 — a structural advantage for a DX12 title
+  that no measurement here can yet confirm. Box64 dynarec variables are
+  deliberately *not* prescribed, because the CPU side has not been measured.
 - **[measurements/RESULTS-2026-08-24.md](measurements/RESULTS-2026-08-24.md)** —
   the raw measurement record, corrections included.
 - **[docs/13-feature-flags.md](docs/13-feature-flags.md)** — flag contract.

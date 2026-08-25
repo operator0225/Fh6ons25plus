@@ -25,23 +25,50 @@ Component versions below come from the projects' own GitHub releases, not
 from comparison articles — several of which gave mutually contradictory dates
 and are not cited here.
 
-| Runtime | Wine | Box64 | Turnip | State |
+There are **two separate lineages**, and their version numbers are not
+comparable. "Ludashi 3.1" is not older than "Winlator 11.2"; they are
+different projects counting separately.
+
+```
+brunodev85/winlator  ──────────────────────►  official 11.x   (glibc + proot, x86_64/Box64)
+        │
+        └──► coffincolors  (Cmod v13.x)
+                    │
+                    └──► Pipetto-crypto  (Bionic: +Arm64EC, +FEXCore)
+                                │
+                                └──► StevenMXZ  (Winlator-Ludashi 3.x)
+```
+
+| Runtime | Wine | CPU translation | Turnip | State |
 |---|---|---|---|---|
-| **Winlator 11.2 Beta** (official) | — | **v0.4.4** | — | current beta |
-| **Winlator 11.0** (official) | 10.10 | v0.4.0 | **26.1.0-devel** | what we measure |
-| Winlator 10.1 | — | v0.3.6 | 25.1.0 | superseded |
-| Winlator Cmod v13.1.1 | 9.20 / Proton 10 | older | bundled | older base |
+| **Winlator 11.2 Beta** (official) | — | Box64 **v0.4.4** | — | current beta |
+| **Winlator 11.0** (official) | 10.10 | Box64 v0.4.0 | **26.1.0-devel + whitebelyash A8XX patches** | what we measure |
+| Winlator 10.1 | — | Box64 v0.3.6 | 25.1.0 | superseded |
+| Winlator Cmod v13.1.1 | 9.20 / Proton 10 | Box64 | bundled | older base |
+| **Winlator-Ludashi 3.1.h** | — | Box64 **or FEXCore (Arm64EC)** | "new default, supports A8xx" | active, Cmod→Bionic line |
 | GameHub / GameNative / WinHub | — | — | — | separate lineage |
 
 Notes worth having:
 
-- **No fork's release notes mention Adreno 8xx or Snapdragon 8 Elite at all.**
-  What actually decides Gen 8 support is the Turnip version, and 26.1.0-devel
-  is the newest published in any of them. There is no Adreno-830-specific
-  build to switch to.
+- **Correction.** An earlier version of this document claimed no fork's
+  release notes mention Adreno 8xx. That was **wrong**, and wrong in the
+  direction that mattered. Official Winlator 11.0's own notes read *"Updated
+  Mesa Turnip (v26.1.0 devel with whitebelyash patches for A8XX)"* — so the
+  stack already in use carries **Adreno-8xx-specific patches**, which is why
+  an A830 works at all. Ludashi 3.1.h separately says *"new default turnip
+  which also supports adreno A8xx"*. Both mention it; the claim was simply
+  false.
+- That correction **strengthens** the recommendation rather than weakening it.
+  Ludashi's note is a fork *catching up* to A8xx support that official 11.0
+  already shipped. It is not evidence of a newer or better Turnip — Ludashi
+  publishes no Turnip version number to compare against.
 - The widely-linked `Stredohori/Winlator-CMOD` mirror was **archived in May
   2026**; Cmod releases come from coffincolors directly. Its published base is
   Wine 9.20 / Proton 10 era — **older than official 11.0's Wine 10.10**.
+- Pipetto-crypto, the Bionic upstream, publishes **no releases at all** — the
+  repo's Releases page is empty, and community reports say the original
+  developers moved on. The APKs come from downstream forks such as Ludashi,
+  which is actively maintained (3.1.h, Jun 22).
 - Reliable release *dates* could not be established. Sources conflict badly
   and much of what is indexed is content-farm material. Version-to-component
   mappings from GitHub releases are used instead, and those are consistent.
@@ -52,14 +79,19 @@ Notes worth having:
 
 The reasoning is evidence, not preference:
 
-1. **The GPU side is already optimal.** Turnip 26.1.0-devel is the newest
-   Turnip any fork ships, every VKD3D-Proton requirement is present, and BC
-   textures are native. There is nothing a different fork improves here.
+1. **The GPU side is already handled.** The measured Turnip carries the
+   whitebelyash A8XX patches, every VKD3D-Proton requirement is present, and
+   BC textures are native. No fork publishes a Turnip version that can be
+   *shown* to be newer — Ludashi ships one without naming it, so switching for
+   the GPU would be trading a measured driver for an unnamed one.
 2. **Cmod's published base is older** — Wine 9.20 against 11.0's 10.10. Moving
    there is a downgrade on the axis that is actually unmeasured.
 3. **Switching forks means rebuilding the container**, discarding a
    configuration this project has measured across ten rounds. That is a
    regression risk taken against a stack known to work.
+
+This is a recommendation about the **GPU** axis, which is the axis measured so
+far. The section below is the one open case against it.
 
 ### The one targeted upgrade
 
@@ -73,6 +105,61 @@ one change with a specific reason behind it.
 It is a beta. Keep the 11.0 APK so it can be rolled back, and re-run
 `vkbench` after upgrading — the numbers are directly comparable now that
 `thermal` gates the starting state.
+
+### The open case for Ludashi: Arm64EC + FEXCore
+
+**Official Winlator has no Arm64EC container type and no FEXCore.** The
+Bionic line does, and that is the one capability official 11.x genuinely
+lacks. It is worth taking seriously for a reason that has nothing to do with
+Turnip:
+
+> In an Arm64EC container, Wine's own DLLs — including **VKD3D-Proton** —
+> run as native ARM64 code. Only the game's x86_64 code is translated.
+
+Under Box64 on official Winlator, *everything* is translated, VKD3D's DX12→
+Vulkan work included. For a DX12-only title that is a real amount of work
+moved off the translator. That aims squarely at the factor this project has
+already named as the largest unmeasured one and the plausible next
+bottleneck.
+
+**It is a hypothesis, not a recommendation.** What makes it untested:
+
+- The game's own code is still emulated — by FEXCore instead of Box64. Which
+  translator is faster *for this game* is unknown, and swapping Box64 for
+  FEXCore is not automatically a win.
+- No Wine, FEXCore or Turnip version numbers are published for Ludashi
+  3.1.h, so there is nothing to compare against the measured stack.
+- The Bionic upstream is unmaintained; only downstream forks ship builds.
+- It requires a full reinstall and a rebuilt container, discarding the
+  characterised configuration.
+- FH6 [cannot be launched at all](01-gamepass-msstore.md) from the available
+  Game Pass copy, so the end-to-end case cannot be closed either way yet.
+
+The way to settle it is a CPU-side benchmark run under both — the same
+measurement gap the Box64 tuning section refuses to guess around. Building
+that turns this from an argument into a number.
+
+### The package-name trick, and whether it applies here
+
+Ludashi ships three APKs that are **the same build with different package
+names**: `bionic-vanilla`, `ludashi-bionic` (impersonating the Ludashi
+benchmark app), and `Redmagic-build`. The intent is to land in an OEM's
+benchmark whitelist so the firmware unlocks a higher performance mode.
+
+This is interesting here because **thermal throttling is this project's main
+measured risk** — sustained clock is half of boost. Anything that moves the
+sustained clock matters more than anything on the feature list.
+
+But the reported effect is on **Xiaomi** devices, and the target here is a
+Galaxy S25+. Samsung's equivalent mechanism is a different system, and
+whether it responds to this package name on One UI in 2026 is **unverified**.
+Do not assume it carries over.
+
+It is, however, unusually easy to test properly: two APKs of the same build
+differing *only* in package name is a controlled A/B. Run the `vkbench` soak
+ladder from a `thermal`-verified cold start under each, and compare
+`sustained_ms` and the profiler's GPU clock trace. That measures the claim
+directly instead of repeating it.
 
 ### VKD3D-Proton
 
@@ -125,7 +212,14 @@ then change one variable at a time against it. Until then the defaults stand.
 
 ## What would change this recommendation
 
-- A fork shipping a **newer Turnip** than 26.1.0-devel with Gen 8 fixes.
+- A fork shipping a **newer Turnip** than 26.1.0-devel with Gen 8 fixes — and
+  publishing the version number, so the claim can be checked.
+- **A measured Arm64EC/FEXCore win over Box64 on this device.** This is the
+  strongest open case, and it becomes decidable the moment a CPU-side
+  benchmark exists. Native-ARM64 VKD3D is a real structural advantage for a
+  DX12 title; it is just not yet a measured one.
+- **A measured sustained-clock gain** from the Ludashi package name on
+  Samsung, via the A/B above.
 - A **measured** Box64 regression in 0.4.4 versus 0.4.0.
 - A specific FH6 defect fixed in a newer VKD3D-Proton.
 - Wine gaining a Vulkan 1.4 instance — though on inspection the 1.3.301 cap
