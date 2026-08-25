@@ -110,6 +110,85 @@ finished.
 
 ---
 
+## Measured from the source, 2026-08-25
+
+"No timeline" is not the same as "no way to tell how close it is". The
+organisation has eight repositories, and the two that decide this are
+readable. Measure them with:
+
+```sh
+./tools/xodus-progress.sh
+```
+
+### The design, and where it breaks
+
+```
+FH6.exe (GDK)
+   │  calls the GDK API
+   ▼
+xgameruntime.dll     ← xodus-gaming/xgameruntime  (C, Wine side, 5.6k lines)
+   │  ✗ NO IPC CLIENT — this link does not exist yet
+   ▼
+$XDG_RUNTIME_DIR/xodus.sock
+   │
+   ▼
+xodus-service        ← xodus-gaming/xodus  (Rust, host side, 300 lines)
+   │  ✗ protobuf path is `unimplemented!()`
+   ▼
+Microsoft (auth · licensing · collections)   ← this part works
+```
+
+### First measurement
+
+| | |
+|---|---|
+| `E_NOTIMPL` in the DLL | **346** |
+| `return S_OK` | **30** — and mostly per-module registration, not real work |
+| `FIXME` | 411 |
+| Unimplemented share | **92%** |
+| IPC from Wine side to service | **absent** |
+| Protocol operations defined | **5**, of which 3 are `UNKNOWN`/`PING`/`PONG` |
+| Real operations | **one** — `MSA_TOKEN_REQUEST`/`RESPONSE` |
+
+**The scaffold is genuine work.** Every GDK module has an IDL and a C file —
+`xuser`, `xstore`, `xpackage`, `xgamesave`, `xsystem`, `xtaskqueue` and a dozen
+more. Recovering that API shape is the part that needed reverse engineering,
+and it is done. The DLL correctly implements the GDK's `QueryApiImpl` dispatch
+pattern, so its export table is only 7 entries with everything else behind a
+function-table query.
+
+**The bodies are empty, and the halves do not meet.** 346 functions return
+`E_NOTIMPL`; the C side contains no socket client, and the Rust side's
+protobuf path is a one-line `unimplemented!()`. So neither end of the bridge
+between them exists, and the protocol they would speak carries one real
+operation.
+
+### What "close" would look like
+
+`E_NOTIMPL` near zero, IPC present on the C side, and the protocol carrying
+XUser / XStore / XPackage operations instead of a ping and one token request.
+Re-run the script rather than reading announcements.
+
+### Why this project is not going to finish it
+
+Not because it is secret or enormous — it is roughly 350 function bodies and
+an IPC bridge. Because **each of those bodies is defined by what a particular
+game expects at runtime**, and the only way to learn that is to run the game
+and watch it fail. That loop needs a Game Pass account, an MSIXVC package, the
+title itself, and a debugger on the machine that runs it.
+
+This project has already paid for writing code it could not execute: a Vulkan
+probe that reported llvmpipe because the device's loader could not be seen
+from here, and a `Z:\sys\class\kgsl` path that verified under plain Wine and
+returned nothing on the phone. Three hundred and fifty unverifiable function
+bodies against an undocumented API is that same mistake at scale.
+
+The honest position is the one already recorded: this is upstream work, it is
+being done by people who can test it, and the graphics stack below it proceeds
+regardless.
+
+---
+
 ## What this means for the project
 
 **It does not stop the graphics work**, and that is not a consolation prize —

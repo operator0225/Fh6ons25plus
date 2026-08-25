@@ -186,6 +186,20 @@ hides each app's private data, so it reports the package and version and
 says plainly that the Wine/Box64/VKD3D versions inside a container are not
 readable from Termux.
 
+### `tools/xodus-progress.sh` — is the Game Pass blocker moving?
+
+```sh
+./tools/xodus-progress.sh
+```
+
+Counts what actually has to change upstream before a Game Pass title launches:
+`E_NOTIMPL` in the replacement `xgameruntime.dll`, whether its IPC to
+`xodus-service` exists yet, and how many operations the protocol carries. The
+project's stated timeline is `soontm`, so this measures the source instead.
+
+First run: **346 `E_NOTIMPL`, 92% unimplemented, IPC absent, one real protocol
+operation.** See [docs/01-gamepass-msstore.md](docs/01-gamepass-msstore.md).
+
 ### `tools/vkprobe/` — Vulkan capability probe
 
 Reports what Vulkan actually exposes, from `vkGetPhysicalDeviceFeatures2` /
