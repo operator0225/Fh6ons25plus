@@ -200,6 +200,12 @@ project's stated timeline is `soontm`, so this measures the source instead.
 First run: **346 `E_NOTIMPL`, 92% unimplemented, IPC absent, one real protocol
 operation.** See [docs/01-gamepass-msstore.md](docs/01-gamepass-msstore.md).
 
+To hand that work to an agent on a machine that can actually run it, give it
+**[docs/xodus-handover.md](docs/xodus-handover.md)** — a work order built from
+the source, whose central point is that the DLL's stubs are already
+instrumented, so `WINEDEBUG=+gdkc` turns 346 unknowns into the twenty the game
+actually calls.
+
 ### `tools/vkprobe/` — Vulkan capability probe
 
 Reports what Vulkan actually exposes, from `vkGetPhysicalDeviceFeatures2` /
