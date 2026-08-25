@@ -219,9 +219,15 @@ root filesystem**. `Z:` is that container's root, not Android's, so
 `/sys/class/kgsl` simply is not there to open. The Wine test passed because
 plain Wine really does map the host root; Winlator's does not.
 
-The probe is kept because it costs nothing, reports `false` honestly rather
-than fabricating zeros, and may work in other runtimes or configurations. But
-on Winlator, **thermal and clock data has to come from the profiler running
+The probe is kept because it costs nothing and reports `false` honestly rather
+than fabricating zeros. It was left in on the hope that another runtime might
+expose the path — **a survey of eight Winlator forks has since found none
+that does.** Every fork feature that looks like it (REF4IK's GPU/battery
+temperature, Bannerlator's Fusion HUD) is the Android app reading sensors
+host-side and drawing them in its own UI, not the guest process gaining
+access. See [`runtime-selection.md`](runtime-selection.md).
+
+So on Winlator, **thermal and clock data has to come from the profiler running
 in Termux alongside the benchmark**:
 
 ```sh

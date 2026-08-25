@@ -172,6 +172,69 @@ ladder from a `thermal`-verified cold start under each, and compare
 `sustained_ms` and the profiler's GPU clock trace. That measures the claim
 directly instead of repeating it.
 
+### GameNative — the strongest candidate, for a reason nobody was looking at
+
+A survey of eight forks turned up one whose 1.2.0-prerelease notes (2026-08-19)
+read:
+
+> *"Add automatic CPU / GPU power control to AYN, Retroid Pocket and **Samsung
+> Devices**, reduces heat, **thermal throttling** and power consumption"*
+
+and separately:
+
+> *"Fixed lsfg-vk on **8 elite** and other devices with frame capping"*
+
+**That lands on this project's main measured risk, on this device family, by
+name.** Sustained clock here is half of boost and frame-time spread collapses
+from 0.2% to 44% under load — thermal is the number one finding, and this is
+the only fork feature found so far that claims to act on it for Samsung
+specifically. It outranks both the Arm64EC argument and the Ludashi
+package-name trick, because those are inference and a Xiaomi report
+respectively, while this names the vendor and the symptom.
+
+It is also the fork most visibly aimed at this SoC: reported to detect
+Snapdragon 8 Elite in code and branch to A8-Elite Turnip wrappers, Proton
+10.0-arm64ec, and a VKD3D default, with FEXCore, Proton and VKD3D all
+swappable as `.wcp`.
+
+**Verify before relying on any of that:**
+
+- The component figures are second-hand. One is internally inconsistent — the
+  catalog is reported as 2.6 / 2.12 / 2.13 / 3.0b / 3.0.1-0 while the 8-Elite
+  default is reported as **2.14.1, which is not in that list**. Either the
+  catalog reading is incomplete or the default is a stale code path. Do not
+  quote either number until the manifest is read directly.
+- **It is a storefront launcher first.** The README is *"Play the PC games you
+  already own — from Steam, Epic and GOG"*, with *"Log in to your Steam
+  account"* as a setup step. 1.2.0 adds *"Support custom games on the modern
+  build without all-files access"*, so local executables are possible — but
+  this is not a general-purpose container app the way official Winlator is.
+- **It does not unblock FH6.** The Game Pass copy still cannot launch
+  anywhere; Steam/Epic/GOG integration is irrelevant to a Game Pass title, and
+  [there is no Steam version available](01-gamepass-msstore.md).
+
+So its value here is as a **thermal experiment and an Arm64EC test bed**, not
+as a way to get the game running. Those are worth having — the power-control
+claim is testable today with the existing soak ladder, profiler and `thermal`
+gate, and it is a claim about the one thing measured to be limiting.
+
+### Reading GPU clock and temperature from inside a container: closed
+
+Surveying eight forks for a way to expose `/sys/class/kgsl` to the Windows
+process found **none**. The features that look like it are all host-side:
+
+- REF4IK's GPU/battery temperature is the **Android app** reading sensor paths
+  and drawing them in its own UI.
+- Bannerlator's Fusion HUD reads GPU/thermal/VRAM the same way.
+- Bannerlator's FEX runtime indicator reads `/proc/<pid>/maps` — host-side
+  inspection of the guest process, not guest access to sysfs.
+
+This **confirms** the earlier measured finding rather than overturning it:
+`kgsl_sysfs_readable: false` inside Winlator is the proot container's own root
+filesystem, not a misconfiguration, and no fork fixes it. Thermal and clock
+data has to keep coming from the profiler running in Termux alongside the
+benchmark. The question is settled; stop looking for a fork that solves it.
+
 ### VKD3D-Proton
 
 Swappable without changing runtime, via `.wcp` component packs
@@ -182,6 +245,16 @@ forks, so **verify they install on official Winlator before relying on it**.
 Only worth doing with a reason — a specific FH6 bug fixed upstream, say.
 Swapping the DX12 translation layer speculatively, on a stack whose DX12 path
 is otherwise untested, adds a variable rather than removing one.
+
+**An admitted gap in this document.** FH6 is DX12-only, so VKD3D-Proton is the
+component that matters most — and **its version on official Winlator 11.2 is
+unknown**. The 11.2 notes name Box64 v0.4.4 and say nothing about VKD3D; a
+survey of eight forks could not establish it either, and most forks do not
+publish a VKD3D version at all. So the upgrade recommended above is made on
+the CPU component while the most important graphics component is unverified
+on both sides of the comparison. `vkprobe` reports the driver, not the
+translation layer; reading VKD3D's version out of a running container is not
+yet covered by any tool here.
 
 ## Container configuration
 
@@ -229,6 +302,10 @@ then change one variable at a time against it. Until then the defaults stand.
   strongest open case, and it becomes decidable the moment a CPU-side
   benchmark exists. Native-ARM64 VKD3D is a real structural advantage for a
   DX12 title; it is just not yet a measured one.
+- **A measured sustained-clock gain from GameNative's Samsung power control.**
+  This is now the highest-value experiment available, because it targets the
+  one factor already measured to be limiting. It needs no game and no Game
+  Pass copy — soak ladder, profiler, `thermal` gate, compare `sustained_ms`.
 - **A measured sustained-clock gain** from the Ludashi package name on
   Samsung, via the A/B above.
 - A **measured** Box64 regression in 0.4.4 versus 0.4.0.
