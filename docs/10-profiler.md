@@ -28,9 +28,8 @@ workload and need no root:
 
 ### Application-side — not implemented
 
-These exist only inside the rendering process. Nothing outside the container
-can see them, so the profiler reports them as unavailable rather than
-guessing:
+These are unavailable **to this profiler**, so it reports them as unavailable
+rather than guessing:
 
 | Metric | Where it actually lives |
 |---|---|
@@ -39,6 +38,19 @@ guessing:
 | Pipeline creation | VKD3D-Proton / DXVK |
 | Frame queue latency | the swapchain |
 | GPU memory | no `VK_EXT_memory_budget` on this driver (see Stage 2) |
+
+**FPS — the reason was wrong, the conclusion holds.** This section used to say
+frame timing "exists only inside the rendering process". Reading a fork's
+source disproves that: in a Winlator-family runtime the **Android app is the
+presenter** — Wine renders into the X server and the Android side composites
+to the display — so every present passes through Java the runtime owns.
+GameNative hooks exactly that (`GLRenderer.onFrameRenderedListener` →
+`FrameTimeRing.record()`) and logs a real `avg_fps` per session.
+
+The barrier here is **process isolation, not architecture**: this profiler
+runs in Termux, a separate Android app, and cannot hook another app's
+renderer. Same conclusion, honest reason. Getting FPS would mean instrumenting
+the runtime itself, not finding a better sysfs path.
 
 **GPU memory — corrected.** Stage 2 concluded there was no runtime memory
 budget query. That held for the Qualcomm driver; [Turnip exposes

@@ -141,8 +141,10 @@ summary with min/mean/p50/p95/max. Prints which sources are actually readable
 before sampling starts, and writes an empty cell — never a 0 — for anything
 it could not read. See [docs/10-profiler.md](docs/10-profiler.md).
 
-FPS, frametime and shader/pipeline timing are **not** included: they exist
-only inside the rendering process. The doc explains the routes to them.
+FPS, frametime and shader/pipeline timing are **not** included — not because
+they are unobservable (a Winlator-family runtime composites every frame
+itself, and forks do log FPS), but because this profiler runs in Termux and
+cannot hook another app's renderer. The doc explains the routes to them.
 
 ### `tools/vkbench/` — Stage 4/5/7 measurement harness
 

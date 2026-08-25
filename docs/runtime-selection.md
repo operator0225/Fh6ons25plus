@@ -81,9 +81,14 @@ The reasoning is evidence, not preference:
 
 1. **The GPU side is already handled.** The measured Turnip carries the
    whitebelyash A8XX patches, every VKD3D-Proton requirement is present, and
-   BC textures are native. No fork publishes a Turnip version that can be
-   *shown* to be newer — Ludashi ships one without naming it, so switching for
-   the GPU would be trading a measured driver for an unnamed one.
+   BC textures are native.
+
+   ~~No fork publishes a Turnip version that can be *shown* to be newer.~~
+   **Retracted — see [Reading the source](#reading-the-source-rather-than-the-release-notes).**
+   GameNative publishes 86 Turnip builds with exact version strings, several
+   newer than the measured 26.1.0-devel, including Gen8- and OneUI-specific
+   variants. That claim was made from release notes; the manifest says
+   otherwise.
 2. **Cmod's published base is older** — Wine 9.20 against 11.0's 10.10. Moving
    there is a downgrade on the axis that is actually unmeasured.
 3. **Switching forks means rebuilding the container**, discarding a
@@ -199,11 +204,9 @@ swappable as `.wcp`.
 
 **Verify before relying on any of that:**
 
-- The component figures are second-hand. One is internally inconsistent — the
-  catalog is reported as 2.6 / 2.12 / 2.13 / 3.0b / 3.0.1-0 while the 8-Elite
-  default is reported as **2.14.1, which is not in that list**. Either the
-  catalog reading is incomplete or the default is a stale code path. Do not
-  quote either number until the manifest is read directly.
+- ~~The component figures are internally inconsistent — 2.14.1 is not in the
+  reported catalog.~~ **Resolved by reading the source: both numbers are real
+  and live in two different catalogs.** See below.
 - **It is a storefront launcher first.** The README is *"Play the PC games you
   already own — from Steam, Epic and GOG"*, with *"Log in to your Steam
   account"* as a setup step. 1.2.0 adds *"Support custom games on the modern
@@ -256,6 +259,98 @@ on both sides of the comparison. `vkprobe` reports the driver, not the
 translation layer; reading VKD3D's version out of a running container is not
 yet covered by any tool here.
 
+## Reading the source rather than the release notes
+
+Everything above this point was built from release notes and third-party
+summaries. Cloning the repositories and reading the manifests **corrected two
+claims in this document and closed one admitted gap.** Release notes are
+marketing; manifests are the shipping list.
+
+### Component catalogues, from each repo's own manifest
+
+| | official Winlator (`installable_components/`) | GameNative (`manifest.json` + `dxwrapper_download.json`) |
+|---|---|---|
+| **VKD3D-Proton** | 2.12, 2.14.1, **3.0b** | 2.6, 2.12, 2.13, 2.14.1, 3.0b, **3.0.1-0** |
+| **Turnip** | 24.1.0, 25.0.0, **26.0.3** (bundle is 26.1.0-devel+A8XX) | **86 builds**, incl. 26.3.0-R3, Gen8 V34, **26.2.0_R4_OneUI** |
+| **Box64** | 0.3.3, 0.3.5, 0.3.7 | 0.4.4 |
+| **Proton** | — | 10.0 / 10.0-4 / 11.0-1, each **x86-64 and ARM64EC** |
+| **FEXCore** | — | FEX 2601-217d039, 2607, 2608 |
+| **WOWBox64** | — | 0.3.6, 0.4.4 |
+
+### Corrections this forced
+
+1. **"No fork publishes a newer Turnip" was wrong.** GameNative publishes 86
+   with exact version strings. Three matter: `Turnip v26.3.0-R3` (newer than
+   the measured 26.1.0-devel), `Turnip Gen8 V34` (an Adreno-8xx line, now at
+   V34), and **`Turnip v26.2.0_R4_OneUI`** — a build named for Samsung's OS.
+   Whether any is *better* here is unmeasured, but they are named, versioned
+   and downloadable, which is exactly what the earlier claim denied.
+2. **The "2.14.1 inconsistency" was not an inconsistency.** GameNative keeps
+   *two* catalogues: `dxwrapper_download.json` (`.tzst`, tops out at 3.0b, and
+   **does** contain 2.14.1) and `manifest.json` (`.wcp`, which is where
+   3.0.1-0 lives). Both numbers were real; the survey had merged two files.
+   Demanding the manifest was right; concluding "stale code path" was not.
+3. **The VKD3D gap is now partly closed.** Official Winlator's catalogue is
+   2.12 / 2.14.1 / **3.0b**. The version a container *defaults* to is still
+   unread, but the ceiling is knowable and it is 3.0b.
+
+### The most useful thing found: VKD3D 3.0b is installable on official Winlator
+
+Upstream VKD3D-Proton's newest release is **3.0.1**, and its headline includes
+performance work aimed at **mobile GPUs — deferred clears and render pass
+suspend/resume.** Those are tiler optimisations: an Adreno resolves tiles to
+memory on every render-pass boundary, so avoiding needless clears and keeping
+a pass suspended across boundaries attacks the exact bandwidth cost that
+dominates a mobile GPU.
+
+That is the first concrete, non-speculative reason found for touching the DX12
+layer — and it does **not** require changing forks. Official Winlator ships
+3.0b in its own component list, one point release behind. Whether the gap
+matters is measurable rather than arguable.
+
+This also revises the earlier advice to leave VKD3D-Proton alone. That advice
+was written when no specific reason existed. One now does; it is still a
+one-variable change to be measured, not assumed.
+
+### Samsung power control is a real SDK, not the package-name hack
+
+`SamsungPerformanceDriver.kt` imports **`com.samsung.sdk.sperf`** — Samsung's
+own Game Performance SDK — and calls `SPerf.initialize()`,
+`PerformanceManager.getInstance()`, then `CustomParams.TYPE_CPU_MIN` and
+siblings. It exposes **CPU, GPU and bus** floors and ceilings on a 0–4 scale,
+gated by `Build.MANUFACTURER == "samsung"`.
+
+This is a sanctioned API asking the platform to hold clocks, not a benchmark
+whitelist being tricked. It is a far better lead than the Ludashi package-name
+trick, and it reaches **bus** frequency — memory bandwidth — which nothing
+else here touches and which a tiler is sensitive to.
+
+**Unverified:** whether the SDK honours these requests for an unregistered
+app. The code treats failure as normal — `initialize()` is wrapped in
+try/catch and sets `isSamsungSdkAvailable = false` — which is consistent with
+the calls being ignorable. That is precisely what the soak-ladder A/B would
+show.
+
+### FPS host-side: a Stage 10 assumption was too strong
+
+Frame timing is captured by `GLRenderer.onFrameRenderedListener` →
+`FrameRating.record()` → `FrameTimeRing.record()`, and a real community config
+carries `"sessionMetadata":{"avg_fps":57.69,"session_length_sec":123}`.
+
+So presented-FPS **is** observable outside the x86 process — because in a
+Winlator-family runtime the **Android app is the presenter**. Wine renders
+into the X server and the Android side composites to the display, so every
+present passes through Java the runtime already owns.
+
+The Stage 10 doc says FPS "exists only inside the rendering process". That is
+wrong as stated; it is right only for *this* project's tooling, because the
+profiler runs in **Termux**, a different app, and cannot hook another app's
+renderer. The limitation is process isolation, not architecture.
+
+`SystemMetricsReader.kt` also confirms the profiler's sysfs choices — same
+`/sys/class/kgsl/kgsl-3d0/` paths, with a fallback ladder over `gpubusy`,
+`gpu_busy_percentage` and `devfreq/gpu_load` worth borrowing.
+
 ## Container configuration
 
 Settings already validated on this device:
@@ -302,6 +397,11 @@ then change one variable at a time against it. Until then the defaults stand.
   strongest open case, and it becomes decidable the moment a CPU-side
   benchmark exists. Native-ARM64 VKD3D is a real structural advantage for a
   DX12 title; it is just not yet a measured one.
+- **A measured gain from VKD3D-Proton 3.0b** (installable on official Winlator
+  today) over whatever the container currently defaults to. Upstream 3.0.1's
+  mobile-GPU work — deferred clears, render pass suspend/resume — is a
+  tiler-specific reason, and 3.0b is the nearest version reachable without
+  changing forks.
 - **A measured sustained-clock gain from GameNative's Samsung power control.**
   This is now the highest-value experiment available, because it targets the
   one factor already measured to be limiting. It needs no game and no Game
