@@ -106,6 +106,17 @@ It is a beta. Keep the 11.0 APK so it can be rolled back, and re-run
 `vkbench` after upgrading — the numbers are directly comparable now that
 `thermal` gates the starting state.
 
+**Why not 11.1 Final instead?** Because taking the stable would gain nothing
+here. 11.1's changes are a reworked gamepad implementation, Gladio (OpenGL),
+D7VK in the DDraw wrapper, keyboard bindings and XAudio — **none of which are
+on a DX12 title's path**. Box64 v0.4.4 first appears in 11.2. So the real
+choice is "stay on 11.0, or take the beta", not "take the safe stable".
+
+**A trap in reading that releases page:** GitHub's *Latest* badge is on **11.1
+Final**, because 11.2 is flagged as a pre-release and pre-releases never get
+the badge. 11.2 is the newer release. Anything reporting "11.1 is the newest
+official Winlator" has read the badge rather than the list.
+
 ### The open case for Ludashi: Arm64EC + FEXCore
 
 **Official Winlator has no Arm64EC container type and no FEXCore.** The
